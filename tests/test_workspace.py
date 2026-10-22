@@ -116,6 +116,16 @@ def test_cancel_wins_before_atomic_commit(tmp_path):
     assert len(store.messages('general')) == 1
 
 
+def test_shutdown_finishes_cancelled_workers(tmp_path):
+    from job_agent.ai import Assistant
+    store = Store(tmp_path)
+    assistant = Assistant(store, FakeBridge())
+    run_id = assistant.start('general', 'Please wait for cancellation')
+    assistant.close()
+    assert store.run(run_id)['status'] == 'cancelled'
+    assert not assistant.threads
+
+
 def test_restart_recovers_history_and_interrupted_run(tmp_path):
     store = Store(tmp_path)
     run = store.start_run('general', 'Hello')

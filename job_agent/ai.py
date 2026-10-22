@@ -155,15 +155,18 @@ class Assistant:
     def __init__(self, store, bridge):
         self.store, self.bridge = store, bridge
         self.cancel_events = {}
+        self.threads = {}
         self.lock = threading.Lock()
         self.capacity = threading.BoundedSemaphore(2)
 
     def start(self, job_id, text):
         run_id = self.store.start_run(job_id, text)
         cancel = threading.Event()
+        thread = threading.Thread(target=self._work, args=(run_id, job_id, cancel), daemon=True)
         with self.lock:
             self.cancel_events[run_id] = cancel
-        threading.Thread(target=self._work, args=(run_id, job_id, cancel), daemon=True).start()
+            self.threads[run_id] = thread
+            thread.start()
         return run_id
 
     def cancel(self, run_id):
@@ -176,8 +179,13 @@ class Assistant:
     def close(self):
         with self.lock:
             ids = list(self.cancel_events)
+            threads = list(self.threads.values())
         for run_id in ids:
             self.cancel(run_id)
+        # Let the worker's finally block terminate its model process group before
+        # Python exits; otherwise a detached provider process could keep running.
+        for thread in threads:
+            thread.join(timeout=5)
 
     def _structured(self, settings, prompt, cancel, system, run_id, require_documents=False):
         raw = self.bridge.generate(settings, prompt, cancel, system=system)
@@ -253,3 +261,4 @@ class Assistant:
                 self.capacity.release()
             with self.lock:
                 self.cancel_events.pop(run_id, None)
+                self.threads.pop(run_id, None)
