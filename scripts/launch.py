@@ -23,6 +23,16 @@ def probe(port):
         return False
 
 
+def process_identity(pid):
+    result = subprocess.run(['ps', '-p', str(pid), '-o', 'lstart=', '-o', 'command='], capture_output=True, text=True)
+    return result.stdout.strip() if result.returncode == 0 else ''
+
+
+def is_our_process(data):
+    current = process_identity(data['pid'])
+    return bool(current and current == data.get('identity') and '-m job_agent' in current)
+
+
 def main():
     action = sys.argv[1] if len(sys.argv) > 1 else 'start'
     if action == 'stop':
@@ -30,9 +40,14 @@ def main():
             print('No Job Agent process was recorded. Nothing to stop.')
             return
         data = json.loads(PID.read_text())
-        process = subprocess.run(['ps', '-p', str(data['pid']), '-o', 'command='], capture_output=True, text=True)
-        if str(ROOT / '.venv/bin/python') in process.stdout and '-m job_agent' in process.stdout:
+        if is_our_process(data):
             os.kill(data['pid'], signal.SIGTERM)
+            for _ in range(80):
+                if not is_our_process(data):
+                    break
+                time.sleep(.1)
+            if is_our_process(data):
+                raise SystemExit('Job Agent is still shutting down. Wait a moment and run ./stop.sh again.')
             print('Job Agent stopped. Your records are saved.')
         else:
             print('The recorded Job Agent process is no longer running.')
@@ -43,7 +58,7 @@ def main():
         raise SystemExit('Choose a port between 1024 and 65535.')
     if PID.exists():
         recorded = json.loads(PID.read_text())
-        if probe(recorded['port']):
+        if is_our_process(recorded) and probe(recorded['port']):
             url = f'http://127.0.0.1:{recorded["port"]}'
             print(f'Job Agent is already running: {url}')
             webbrowser.open(url)
@@ -55,9 +70,12 @@ def main():
     with (RUN / 'server.log').open('ab') as log:
         process = subprocess.Popen([str(ROOT / '.venv/bin/python'), '-m', 'job_agent', '--port', str(port)],
                                    stdin=subprocess.DEVNULL, stdout=log, stderr=log, cwd=ROOT, start_new_session=True)
-    PID.write_text(json.dumps({'pid': process.pid, 'port': port}))
+    PID.write_text(json.dumps({'pid': process.pid, 'port': port, 'identity': process_identity(process.pid)}))
     for _ in range(80):
         if probe(port):
+            # On macOS Python may resolve through a framework executable during
+            # startup. Store its final identity, not the invoked symlink path.
+            PID.write_text(json.dumps({'pid': process.pid, 'port': port, 'identity': process_identity(process.pid)}))
             url = f'http://127.0.0.1:{port}'
             print(f'Job Agent is ready: {url}\nStop it with ./stop.sh')
             if os.environ.get('JOB_AGENT_NO_BROWSER') != '1':
