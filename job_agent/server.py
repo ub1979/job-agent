@@ -1,0 +1,248 @@
+import asyncio
+from contextlib import asynccontextmanager
+import csv
+import io
+import http.client
+import json
+import os
+from pathlib import Path
+import sqlite3
+import sys
+from urllib.parse import urlsplit
+import zipfile
+
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
+from starlette.middleware.trustedhost import TrustedHostMiddleware
+
+from .ai import Assistant, Bridge
+from .documents import export_docx, export_pdf, extract_upload
+from .models import DocumentInput, JobInput, MessageInput, Profile, SearchInput, Settings, StatusInput
+from .sources import clean_posting, import_url, search_jobs
+from .store import Store
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def data_directory():
+    override = os.environ.get('JOB_AGENT_DATA_DIR')
+    if override:
+        return Path(override).expanduser().resolve()
+    if sys.platform == 'darwin':
+        return Path.home() / 'Library/Application Support/Job Agent'
+    return Path(os.environ.get('XDG_DATA_HOME', str(Path.home() / '.local/share'))) / 'job-agent'
+
+
+def create_app(data_root=None, bridge=None):
+    store = Store(Path(data_root) if data_root else data_directory())
+    bridge = bridge or Bridge(store.root)
+    assistant = Assistant(store, bridge)
+
+    @asynccontextmanager
+    async def lifespan(app):
+        yield
+        assistant.close()
+
+    app = FastAPI(title='Job Agent', lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+    app.state.store, app.state.assistant = store, assistant
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=['localhost', '127.0.0.1', '[::1]', 'testserver'])
+
+    @app.middleware('http')
+    async def local_boundary(request: Request, call_next):
+        if request.method in {'POST', 'PUT', 'PATCH', 'DELETE'}:
+            if request.headers.get('X-Job-Agent') != '1':
+                return JSONResponse({'detail': 'Open Job Agent to make this change.'}, status_code=403)
+            origin = request.headers.get('Origin')
+            if origin and urlsplit(origin).netloc != request.headers.get('host'):
+                return JSONResponse({'detail': 'Cross-site changes are not allowed.'}, status_code=403)
+            try:
+                if int(request.headers.get('content-length', '0')) > 12 * 1024 * 1024:
+                    return JSONResponse({'detail': 'The upload is too large (10 MB document limit).'}, status_code=413)
+            except ValueError:
+                return JSONResponse({'detail': 'Invalid request size.'}, status_code=400)
+        response = await call_next(request)
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        response.headers['Referrer-Policy'] = 'no-referrer'
+        response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'self'"
+        if request.url.path.startswith('/api/'):
+            response.headers['Cache-Control'] = 'no-store'
+        return response
+
+    @app.exception_handler(KeyError)
+    async def missing(request, exc):
+        return JSONResponse({'detail': 'The requested record was not found.'}, status_code=404)
+
+    @app.exception_handler(ValueError)
+    async def invalid(request, exc):
+        return JSONResponse({'detail': str(exc)}, status_code=400)
+
+    def require_job(job_id):
+        if job_id != 'general':
+            store.job(job_id)
+
+    @app.get('/api/health')
+    def health():
+        return {'ok': True, 'app': 'job-agent', 'version': '0.1.0'}
+
+    @app.get('/api/bootstrap')
+    def bootstrap():
+        return {'jobs': store.jobs(), 'profile': store.get('profile', Profile().model_dump()),
+                'settings': store.get('settings', Settings().model_dump()), 'version': '0.1.0'}
+
+    @app.get('/api/catalog')
+    def catalog():
+        return bridge.catalog()
+
+    @app.put('/api/settings')
+    def settings(data: Settings):
+        store.put('settings', data.model_dump())
+        return data
+
+    @app.post('/api/settings/test')
+    def test_settings(data: Settings):
+        text = bridge.generate(data.model_dump(), 'Reply with exactly: Connection ready.', system='You are testing an AI connection. Return the requested short text.')
+        if not text.strip():
+            raise HTTPException(502, 'The model returned an empty reply.')
+        return {'ok': True, 'message': 'Connection ready'}
+
+    @app.exception_handler(RuntimeError)
+    async def runtime_error(request, exc):
+        return JSONResponse({'detail': str(exc)}, status_code=502)
+
+    @app.put('/api/profile')
+    def profile(data: Profile):
+        store.put('profile', data.model_dump())
+        return data
+
+    @app.post('/api/profile/import')
+    async def profile_import(file: UploadFile = File(...)):
+        content = await file.read(10 * 1024 * 1024 + 1)
+        try:
+            text = await asyncio.to_thread(extract_upload, file.filename or '', content)
+            cleaned, verdict = clean_posting(text)
+            return {'text': cleaned, 'verdict': verdict, 'filename': file.filename}
+        except (ValueError, UnicodeError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(400, 'This file could not be read. Try a text-based PDF, Word document, or paste your CV.') from exc
+
+    @app.get('/api/jobs')
+    def jobs():
+        return store.jobs()
+
+    @app.post('/api/jobs')
+    def create_job(data: JobInput, allow_duplicate: bool = False):
+        if data.url and not allow_duplicate:
+            for job in store.jobs():
+                if job['url'].rstrip('/') == data.url.rstrip('/') and not job['archived']:
+                    raise HTTPException(409, {'message': 'You already saved this posting.', 'job_id': job['id']})
+        values = data.model_dump()
+        values['description'], _ = clean_posting(values['description'])
+        return store.create(values)
+
+    @app.put('/api/jobs/{job_id}')
+    def update_job(job_id: str, data: JobInput):
+        values = data.model_dump()
+        values['description'], _ = clean_posting(values['description'])
+        return store.update(job_id, values)
+
+    @app.get('/api/jobs/{job_id}')
+    def get_job(job_id: str):
+        require_job(job_id)
+        return {'job': store.job(job_id) if job_id != 'general' else None, 'messages': store.messages(job_id),
+                'documents': store.documents(job_id) if job_id != 'general' else [],
+                'events': store.events(job_id) if job_id != 'general' else [], 'run': store.latest_run(job_id)}
+
+    @app.post('/api/jobs/{job_id}/status')
+    def status(job_id: str, data: StatusInput):
+        return store.status(job_id, data.status, data.date)
+
+    @app.post('/api/jobs/{job_id}/archive')
+    def archive(job_id: str, archived: bool = True):
+        return store.update(job_id, {'archived': int(archived)})
+
+    @app.post('/api/jobs/{job_id}/messages')
+    def message(job_id: str, data: MessageInput):
+        require_job(job_id)
+        if not data.text.strip():
+            raise HTTPException(400, 'Write a message first.')
+        try:
+            run_id = assistant.start(job_id, data.text.strip())
+        except sqlite3.IntegrityError as exc:
+            raise HTTPException(409, 'This conversation is already working. Wait or stop the current response.') from exc
+        return {'run_id': run_id}
+
+    @app.post('/api/runs/{run_id}/cancel')
+    def cancel(run_id: str):
+        store.run(run_id)
+        assistant.cancel(run_id)
+        return {'ok': True}
+
+    @app.post('/api/jobs/{job_id}/documents')
+    def document(job_id: str, data: DocumentInput):
+        return store.add_document(job_id, data.model_dump())
+
+    @app.get('/api/documents/{doc_id}/{format}')
+    def download(doc_id: str, format: str):
+        doc = store.document(doc_id)
+        if format == 'md':
+            content, mime = doc['content'].encode(), 'text/markdown; charset=utf-8'
+        elif format == 'docx':
+            content, mime = export_docx(doc['content']), 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        elif format == 'pdf':
+            content, mime = export_pdf(doc['content']), 'application/pdf'
+        else:
+            raise HTTPException(404, 'Unknown format')
+        return Response(content, media_type=mime, headers={'Content-Disposition': f'attachment; filename="{doc["kind"]}-{doc_id[:8]}.{format}"'})
+
+    @app.post('/api/import-url')
+    def fetch_url(data: dict):
+        url = str(data.get('url') or '')
+        if len(url) > 2000:
+            raise HTTPException(400, 'The URL is too long.')
+        try:
+            return import_url(url)
+        except (OSError, http.client.HTTPException) as exc:
+            raise HTTPException(502, 'This site could not be read. Paste the job description instead.') from exc
+
+    @app.post('/api/search')
+    def search(data: SearchInput):
+        return search_jobs(data.query, data.locations, data.work_mode, data.days)
+
+    @app.get('/api/export')
+    def backup():
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr('profile.json', json.dumps(store.get('profile', {}), ensure_ascii=False, indent=2))
+            archive.writestr('general-chat.json', json.dumps(store.messages('general'), ensure_ascii=False, indent=2))
+            jobs = store.jobs()
+            archive.writestr('jobs.json', json.dumps(jobs, ensure_ascii=False, indent=2))
+            tracker = io.StringIO()
+            fields = ['id', 'title', 'company', 'location', 'status', 'deadline', 'url', 'archived']
+            writer = csv.DictWriter(tracker, fieldnames=fields)
+            writer.writeheader()
+            for job in jobs:
+                # Prevent spreadsheet formula execution in exported source text.
+                writer.writerow({k: ("'" + str(job[k]) if str(job[k]).startswith(('=', '+', '-', '@', '\t', '\r')) else job[k]) for k in fields})
+                folder = f'applications/{job["id"]}'
+                archive.writestr(f'{folder}/chat.json', json.dumps(store.messages(job['id']), ensure_ascii=False, indent=2))
+                archive.writestr(f'{folder}/events.json', json.dumps(store.events(job['id']), ensure_ascii=False, indent=2))
+                for doc in store.documents(job['id']):
+                    archive.writestr(f'{folder}/{doc["kind"]}-{doc["id"]}.md', doc['content'])
+            archive.writestr('tracker.csv', tracker.getvalue())
+        return Response(buffer.getvalue(), media_type='application/zip', headers={'Content-Disposition': 'attachment; filename="job-agent-backup.zip"'})
+
+    dist = ROOT / 'web/dist'
+    if (dist / 'assets').exists():
+        app.mount('/assets', StaticFiles(directory=dist / 'assets'), name='assets')
+
+    @app.get('/{path:path}')
+    def index(path: str):
+        if path.startswith('api/'):
+            raise HTTPException(404, 'Unknown endpoint')
+        if not (dist / 'index.html').exists():
+            return Response('Build the interface with: cd web && npm install && npm run build', status_code=503)
+        return FileResponse(dist / 'index.html')
+
+    return app
