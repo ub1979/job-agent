@@ -2,6 +2,7 @@
 import http.client
 import ipaddress
 import json
+import re
 import socket
 import ssl
 import urllib.parse
@@ -108,14 +109,35 @@ def location_filter(value):
         return ('cities', value.lower())
 
 
-def search_jobs(query, locations, work_mode, days):
+def title_terms(text):
+    """Whole words, with explicit AI/ML aliases; never match 'ai' inside a word."""
+    # Syndicated titles may append an agency, e.g. “... via AI Gig Scout”.
+    text = re.sub(r'\bvia\b.*$', '', text, flags=re.I)
+    text = re.sub(r'\bartificial intelligence\b', 'ai', text, flags=re.I)
+    text = re.sub(r'\bmachine learning\b', 'ml', text, flags=re.I)
+    return set(re.findall(r'[^\W_]+', text.casefold())) - {'of', 'the', 'and', 'a', 'an', 'for', 'in'}
+
+
+def search_alternatives(query):
+    query = re.sub(r'^\s*(?:i\s+(?:want|need|am looking for)|find me|find|looking for|search for)\s+', '', query, flags=re.I)
+    alternatives = list(dict.fromkeys(p.strip(' \"\'') for p in re.split(r'\bor\b|[;,\n]', query, flags=re.I) if p.strip(' \"\'')))
+    if not alternatives or any(not title_terms(p) for p in alternatives):
+        raise ValueError('Enter a job title or keywords, such as Head of AI or Director of AI.')
+    if len(alternatives) > 4:
+        raise ValueError('Search up to four alternative titles at once.')
+    return alternatives
+
+
+def search_jobs(query, locations, work_mode, days, match_mode='title'):
+    alternatives = search_alternatives(query)
     # One query per place implements OR even when the API combines facets with AND.
     places = list(dict.fromkeys(p.strip() for p in locations.split(',') if p.strip())) or ['']
     if len(places) > 5:
         raise ValueError('Search up to five locations at once.')
 
-    def search(place):
-        params = [('q', query), ('limit', '30'), ('description_format', 'text'), ('posted_within_days', str(days))]
+    def search(task):
+        place, term = task
+        params = [('q', term), ('limit', '30'), ('description_format', 'text'), ('posted_within_days', str(days))]
         if work_mode != 'any':
             params.append(('work_mode', work_mode))
         facet = location_filter(place)
@@ -127,13 +149,15 @@ def search_jobs(query, locations, work_mode, days):
             body = json.loads(raw)
             if not isinstance(body.get('data'), list):
                 raise ValueError('The source returned an unexpected response.')
+            if body.get('meta', {}).get('ignored_params'):
+                raise ValueError('The source did not apply all search filters. Results withheld; try again later.')
             return body['data'], None
         except (ValueError, OSError, http.client.HTTPException) as exc:
             return [], f'{place or "Worldwide"}: {str(exc)[:250]}'
 
-    results, errors, seen = [], [], set()
+    results, errors, seen, filtered = [], [], set(), 0
     with ThreadPoolExecutor(max_workers=3) as pool:
-        batches = list(pool.map(search, places))
+        batches = list(pool.map(search, [(place, term) for place in places for term in alternatives]))
     for jobs, error in batches:
         if error:
             errors.append(error)
@@ -142,10 +166,17 @@ def search_jobs(query, locations, work_mode, days):
             if not url.startswith(('https://', 'http://')) or url in seen:
                 continue
             seen.add(url)
+            if match_mode == 'title' and not any(title_terms(term) <= title_terms(str(job.get('title') or '')) for term in alternatives):
+                filtered += 1
+                continue
             description, _ = clean_posting(str(job.get('description') or ''))
             results.append({'title': str(job.get('title') or 'Untitled role')[:200], 'company': str(job.get('company') or '')[:200],
                             'location': str(job.get('location') or '')[:300], 'url': url, 'description': description,
                             'source': 'Freehire', 'posted': job.get('posted_at'), 'work_mode': job.get('work_mode'),
                             'countries': job.get('countries', []), 'deadline': ''})
-    return {'jobs': results, 'errors': errors, 'source': 'Freehire',
-            'coverage': 'Up to 30 results per location from Freehire. Coverage varies by country and role. Remote jobs may still require residency or work permission. Verify details on the original posting.'}
+    return {'jobs': results, 'errors': list(dict.fromkeys(errors)), 'source': 'Freehire',
+            'queries': alternatives, 'filtered_out': filtered, 'match_mode': match_mode,
+            'coverage': 'Freehire only: up to 30 candidates per title and location, then deduplicated. '
+                        + ('Title matching requires every meaningful word of at least one requested title (AI and artificial intelligence are equivalent). '
+                           f'{filtered} unrelated candidates hidden. ' if match_mode == 'title' else 'Broad keyword search can match descriptions and unrelated titles. ')
+                        + 'This is a limited sample, not every available job. Remote eligibility varies; verify the original posting.'}

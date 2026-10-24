@@ -19,7 +19,8 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from .ai import Assistant, Bridge
 from .documents import export_docx, export_pdf, extract_upload
 from .models import DocumentInput, JobInput, MessageInput, Profile, SearchInput, Settings, StatusInput
-from .sources import clean_posting, import_url, search_jobs
+from .sources import clean_posting, import_url
+from .discovery import discover_jobs
 from .store import Store
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -150,9 +151,12 @@ def create_app(data_root=None, bridge=None):
     @app.get('/api/jobs/{job_id}')
     def get_job(job_id: str):
         require_job(job_id)
+        # Read completion before content: a worker can commit between reads,
+        # but must never make old content appear to be a completed response.
+        run = store.latest_run(job_id)
         return {'job': store.job(job_id) if job_id != 'general' else None, 'messages': store.messages(job_id),
                 'documents': store.documents(job_id) if job_id != 'general' else [],
-                'events': store.events(job_id) if job_id != 'general' else [], 'run': store.latest_run(job_id)}
+                'events': store.events(job_id) if job_id != 'general' else [], 'run': run}
 
     @app.post('/api/jobs/{job_id}/status')
     def status(job_id: str, data: StatusInput):
@@ -208,7 +212,7 @@ def create_app(data_root=None, bridge=None):
 
     @app.post('/api/search')
     def search(data: SearchInput):
-        return search_jobs(data.query, data.locations, data.work_mode, data.days)
+        return discover_jobs(data.query, data.locations, data.work_mode, data.days, data.match_mode, data.sources)
 
     @app.get('/api/export')
     def backup():

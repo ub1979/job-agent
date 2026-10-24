@@ -78,6 +78,8 @@ class SearchInput(BaseModel):
     locations: str = Field(default='', max_length=500)
     work_mode: Literal['any', 'remote', 'hybrid', 'onsite'] = 'any'
     days: int = Field(default=30, ge=1, le=90)
+    match_mode: Literal['title', 'broad'] = 'title'
+    sources: Literal['all', 'freehire', 'web'] = 'all'
 
 
 class AIResponse(BaseModel):

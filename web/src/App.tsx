@@ -816,11 +816,23 @@ function FindJobs({
   const [query, setQuery] = useState(""),
     [locations, setLocations] = useState(profile.locations),
     [mode, setMode] = useState(profile.work_mode),
+    [matchMode, setMatchMode] = useState("title"),
+    [sources, setSources] = useState("all"),
     [days, setDays] = useState(30);
   const [result, setResult] = useState<{
-      jobs: (JobForm & { posted?: string; work_mode?: string })[];
+      jobs: (JobForm & {
+        posted?: string;
+        work_mode?: string;
+        verification?: string;
+      })[];
       errors: string[];
       coverage: string;
+      source_reports?: {
+        name: string;
+        status: string;
+        matches: number;
+        queries: string[];
+      }[];
     } | null>(null),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
@@ -836,6 +848,8 @@ function FindJobs({
           query,
           locations,
           work_mode: mode,
+          match_mode: matchMode,
+          sources,
           days,
         }),
       );
@@ -875,13 +889,29 @@ function FindJobs({
         description="Search across locations, then choose the roles worth a conversation."
       />
       <form className="surface search-form" onSubmit={search}>
-        <Field label="Role or skills">
+        <Field
+          label="Role or skills"
+          hint="Separate alternative titles with ‘or’. Title matching is on by default."
+        >
           <input
             className="input"
-            placeholder="e.g. Data analyst, customer success"
+            placeholder="e.g. Head of AI or Director of AI"
+            required
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
+        </Field>
+        <Field label="Match results">
+          <select
+            className="input"
+            value={matchMode}
+            onChange={(e) => setMatchMode(e.target.value)}
+          >
+            <option value="title">Job title matches</option>
+            <option value="broad">
+              Broad keywords (includes descriptions)
+            </option>
+          </select>
         </Field>
         <Field
           label="Cities or countries"
@@ -906,7 +936,21 @@ function FindJobs({
             <option value="onsite">On-site</option>
           </select>
         </Field>
-        <Field label="Posted within">
+        <Field label="Search sources">
+          <select
+            className="input"
+            value={sources}
+            onChange={(e) => setSources(e.target.value)}
+          >
+            <option value="all">Freehire + public web (recommended)</option>
+            <option value="web">Public web: boards + company careers</option>
+            <option value="freehire">Freehire only</option>
+          </select>
+        </Field>
+        <Field
+          label="Posted within"
+          hint="Applies to Freehire. Web posting dates need checking."
+        >
           <select
             className="input"
             value={days}
@@ -923,15 +967,47 @@ function FindJobs({
       </form>
       <div className="source-strip">
         <span className="tiny-dot" />
-        <b>Source: Freehire</b>
+        <b>Search across sources</b>
         <span>
-          International coverage · Remote eligibility varies by employer
+          Freehire + public web discovery across job boards and company careers
         </span>
       </div>
       {error && <Alert>{error}</Alert>}
       {result ? (
         <>
           <p className="muted small">{result.coverage}</p>
+          {result.source_reports && (
+            <details
+              className="surface"
+              style={{ padding: 16, marginBottom: 16 }}
+            >
+              <summary>
+                Where we searched · view queries and source status
+              </summary>
+              {result.source_reports.map((source, i) => (
+                <div key={i} style={{ marginTop: 12 }}>
+                  <b>{source.name}</b> · {source.status} · {source.matches}{" "}
+                  matches
+                  <p className="muted small">{source.queries.join(" · ")}</p>
+                  {source.name !== "Freehire" &&
+                    source.queries.map((q) => (
+                      <a
+                        key={q}
+                        className="text-button"
+                        href={
+                          "https://www.google.com/search?q=" +
+                          encodeURIComponent(q)
+                        }
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        Open this web search <ExternalLink size={14} />
+                      </a>
+                    ))}
+                </div>
+              ))}
+            </details>
+          )}
           {result.errors.map((x) => (
             <Alert key={x}>{x}</Alert>
           ))}
@@ -963,6 +1039,10 @@ function FindJobs({
                       </span>
                     </div>
                     <div className="result-meta">
+                      <span className="chip-label">{j.source}</span>
+                      {j.verification === "web_lead" && (
+                        <span>Web lead · verify details on original</span>
+                      )}
                       {j.work_mode && (
                         <span className="chip-label">{j.work_mode}</span>
                       )}
@@ -1016,9 +1096,10 @@ function FindJobs({
               })}
             </div>
           ) : (
-            <Empty icon={<Search />} title="No matches from this source">
-              Try fewer keywords, another location or a broader date range. You
-              can always add a job from its link.
+            <Empty icon={<Search />} title="No matching results returned">
+              No matching titles in these sources’ limited sample does not mean
+              no jobs exist. Try another location, a broader date range or the
+              broad keyword option. You can always add a job from its link.
             </Empty>
           )}
         </>

@@ -105,3 +105,34 @@ test("responsive home, theme and settings", async ({ page }, testInfo) => {
     ),
   ).toBe(true);
 });
+
+test("search defaults to matching titles", async ({ page }) => {
+  const requests: Record<string, unknown>[] = [];
+  await page.route("**/api/search", async (route) => {
+    requests.push(route.request().postDataJSON());
+    await route.fulfill({
+      json: {
+        jobs: [],
+        errors: [],
+        source: "Freehire",
+        coverage: "5 unrelated candidates hidden.",
+      },
+    });
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Find jobs", exact: true }).click();
+  await page
+    .getByPlaceholder("e.g. Head of AI or Director of AI")
+    .fill("Head of AI or Director of AI");
+  await page.locator("form").getByRole("button", { name: "Find jobs" }).click();
+  await expect(page.getByText("5 unrelated candidates hidden.")).toBeVisible();
+  expect(requests[0].query).toBe("Head of AI or Director of AI");
+  expect(requests[0].match_mode).toBe("title");
+  expect(requests[0].sources).toBe("all");
+  await page
+    .getByRole("combobox", { name: "Match results", exact: true })
+    .selectOption("broad");
+  await page.locator("form").getByRole("button", { name: "Find jobs" }).click();
+  await expect.poll(() => requests.length).toBe(2);
+  expect(requests[1].match_mode).toBe("broad");
+});
