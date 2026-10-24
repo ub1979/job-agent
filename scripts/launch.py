@@ -24,7 +24,8 @@ def probe(port):
 
 
 def process_identity(pid):
-    result = subprocess.run(['ps', '-p', str(pid), '-o', 'lstart=', '-o', 'command='], capture_output=True, text=True)
+    result = subprocess.run(['ps', '-p', str(pid), '-o', 'lstart=', '-o', 'command='],
+                            capture_output=True, text=True, env={**os.environ, 'LC_ALL': 'C'})
     return result.stdout.strip() if result.returncode == 0 else ''
 
 
