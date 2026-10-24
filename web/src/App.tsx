@@ -158,7 +158,15 @@ function Modal({
     return () => dialog.current?.close();
   }, []);
   return (
-    <dialog ref={dialog} className="modal" onCancel={onClose}>
+    <dialog
+      ref={dialog}
+      className="modal"
+      aria-label={title}
+      onCancel={(e) => {
+        e.preventDefault();
+        onClose();
+      }}
+    >
       <div className="modal-head">
         <h2>{title}</h2>
         <button
@@ -827,6 +835,7 @@ function FindJobs({
       })[];
       errors: string[];
       coverage: string;
+      filtered_out?: number;
       source_reports?: {
         name: string;
         status: string;
@@ -842,6 +851,7 @@ function FindJobs({
     e.preventDefault();
     setBusy(true);
     setError("");
+    setResult(null);
     try {
       setResult(
         await api("/search", "POST", {
@@ -889,128 +899,148 @@ function FindJobs({
         description="Search across locations, then choose the roles worth a conversation."
       />
       <form className="surface search-form" onSubmit={search}>
-        <Field
-          label="Role or skills"
-          hint="Separate alternative titles with ‘or’. Title matching is on by default."
-        >
-          <input
-            className="input"
-            placeholder="e.g. Head of AI or Director of AI"
-            required
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-        </Field>
-        <Field label="Match results">
-          <select
-            className="input"
-            value={matchMode}
-            onChange={(e) => setMatchMode(e.target.value)}
-          >
-            <option value="title">Job title matches</option>
-            <option value="broad">
-              Broad keywords (includes descriptions)
-            </option>
-          </select>
-        </Field>
-        <Field
-          label="Cities or countries"
-          hint="Separate with commas. Leave blank for worldwide."
-        >
-          <input
-            className="input"
-            placeholder="London, Germany, Canada"
-            value={locations}
-            onChange={(e) => setLocations(e.target.value)}
-          />
-        </Field>
-        <Field label="How you work">
-          <select
-            className="input"
-            value={mode}
-            onChange={(e) => setMode(e.target.value)}
-          >
-            <option value="any">Any arrangement</option>
-            <option value="remote">Remote</option>
-            <option value="hybrid">Hybrid</option>
-            <option value="onsite">On-site</option>
-          </select>
-        </Field>
-        <Field label="Search sources">
-          <select
-            className="input"
-            value={sources}
-            onChange={(e) => setSources(e.target.value)}
-          >
-            <option value="all">Freehire + public web (recommended)</option>
-            <option value="web">Public web: boards + company careers</option>
-            <option value="freehire">Freehire only</option>
-          </select>
-        </Field>
-        <Field
-          label="Posted within"
-          hint="Applies to Freehire. Web posting dates need checking."
-        >
-          <select
-            className="input"
-            value={days}
-            onChange={(e) => setDays(Number(e.target.value))}
-          >
-            <option value={7}>7 days</option>
-            <option value={30}>30 days</option>
-            <option value={90}>90 days</option>
-          </select>
-        </Field>
-        <button className="btn primary" disabled={busy}>
-          {busy ? <Spinner /> : <Search size={17} />} Find jobs
-        </button>
+        <div className="search-primary">
+          <Field label="Roles or skills">
+            <input
+              className="input"
+              placeholder="e.g. Head of AI or Director of AI"
+              required
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+          </Field>
+          <Field label="Cities or countries">
+            <input
+              className="input"
+              placeholder="e.g. UK, UAE"
+              value={locations}
+              onChange={(e) => setLocations(e.target.value)}
+            />
+          </Field>
+        </div>
+        <div className="search-filters">
+          <Field label="Match results">
+            <select
+              className="input"
+              value={matchMode}
+              onChange={(e) => setMatchMode(e.target.value)}
+            >
+              <option value="title">Job titles</option>
+              <option value="broad">Broad keywords</option>
+            </select>
+          </Field>
+          <Field label="How you work">
+            <select
+              className="input"
+              value={mode}
+              onChange={(e) => setMode(e.target.value)}
+            >
+              <option value="any">Any arrangement</option>
+              <option value="remote">Remote</option>
+              <option value="hybrid">Hybrid</option>
+              <option value="onsite">On-site</option>
+            </select>
+          </Field>
+          <Field label="Search sources">
+            <select
+              className="input"
+              value={sources}
+              onChange={(e) => setSources(e.target.value)}
+            >
+              <option value="all">Freehire + web</option>
+              <option value="web">Public web</option>
+              <option value="freehire">Freehire</option>
+            </select>
+          </Field>
+          <Field label="Posted within">
+            <select
+              className="input"
+              value={days}
+              onChange={(e) => setDays(Number(e.target.value))}
+              disabled={sources === "web"}
+            >
+              <option value={7}>7 days</option>
+              <option value={30}>30 days</option>
+              <option value={90}>90 days</option>
+            </select>
+          </Field>
+        </div>
+        <div className="search-footer">
+          <p>
+            Separate roles with “or” and locations with commas. Leave locations
+            blank for worldwide.
+            <br />
+            Date filtering applies to Freehire; check dates on web listings.
+          </p>
+          <button className="btn primary" disabled={busy}>
+            {busy ? <Spinner /> : <Search size={17} />}
+            {busy ? "Searching…" : "Find jobs"}
+          </button>
+        </div>
       </form>
-      <div className="source-strip">
-        <span className="tiny-dot" />
-        <b>Search across sources</b>
-        <span>
-          Freehire + public web discovery across job boards and company careers
-        </span>
-      </div>
       {error && <Alert>{error}</Alert>}
       {result ? (
         <>
-          <p className="muted small">{result.coverage}</p>
-          {result.source_reports && (
-            <details
-              className="surface"
-              style={{ padding: 16, marginBottom: 16 }}
-            >
-              <summary>
-                Where we searched · view queries and source status
-              </summary>
-              {result.source_reports.map((source, i) => (
-                <div key={i} style={{ marginTop: 12 }}>
-                  <b>{source.name}</b> · {source.status} · {source.matches}{" "}
-                  matches
-                  <p className="muted small">{source.queries.join(" · ")}</p>
-                  {source.name !== "Freehire" &&
-                    source.queries.map((q) => (
-                      <a
-                        key={q}
-                        className="text-button"
-                        href={
-                          "https://www.google.com/search?q=" +
-                          encodeURIComponent(q)
-                        }
-                        target="_blank"
-                        rel="noopener noreferrer"
-                      >
-                        Open this web search <ExternalLink size={14} />
-                      </a>
-                    ))}
+          <div className="search-summary" role="status">
+            <div>
+              <b>{result.jobs.length} matching opportunities</b>
+              <p>
+                {result.filtered_out || 0} unrelated results filtered ·
+                Duplicate links removed
+              </p>
+            </div>
+            <span className="chip-label">
+              {result.errors.length
+                ? "Partial search · some sources unavailable"
+                : "Search complete"}
+            </span>
+          </div>
+          <details className="search-details surface">
+            <summary>Search coverage & source details</summary>
+            <p className="muted small">{result.coverage}</p>
+            {result.errors.length > 0 && (
+              <p className="notice">
+                Some sources could not complete their search. Available results
+                are shown below. You can retry or open the queries directly.
+              </p>
+            )}
+            <div className="source-report-list">
+              {result.source_reports?.map((source, i) => (
+                <div className="source-report" key={i}>
+                  <div>
+                    <b>{source.name}</b>
+                    <span className={"source-status " + source.status}>
+                      {source.status === "no_results"
+                        ? "No results returned"
+                        : source.status === "unavailable"
+                          ? "Unavailable"
+                          : source.status === "partial"
+                            ? "Partially searched"
+                            : "Searched"}{" "}
+                      · {source.matches} new matches
+                    </span>
+                  </div>
+                  {source.queries.map((q) => (
+                    <p key={q} className="source-query">
+                      {q}
+                      {source.name !== "Freehire" && (
+                        <a
+                          href={
+                            "https://www.google.com/search?q=" +
+                            encodeURIComponent(q)
+                          }
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          Open search <ExternalLink size={12} />
+                        </a>
+                      )}
+                    </p>
+                  ))}
                 </div>
               ))}
-            </details>
-          )}
-          {result.errors.map((x) => (
-            <Alert key={x}>{x}</Alert>
-          ))}
+            </div>
+          </details>
           <div className="section-title">
             <h2>{result.jobs.length} opportunities</h2>
             <span className="muted small">
@@ -1120,6 +1150,253 @@ function FindJobs({
   );
 }
 
+type SavedCV = {
+  id: string;
+  filename: string;
+  title: string;
+  created: string;
+  text?: string;
+};
+function CVLibrary({
+  activeId,
+  onUse,
+}: {
+  activeId?: string;
+  onUse: (cv: SavedCV & { text: string }) => void;
+}) {
+  const [cvs, setCVs] = useState<SavedCV[]>([]),
+    [busy, setBusy] = useState("");
+  const [errors, setErrors] = useState<string[]>([]),
+    [filter, setFilter] = useState("");
+  const [review, setReview] = useState<(SavedCV & { text: string }) | null>(
+    null,
+  );
+  const [notice, setNotice] = useState("");
+  const file = useRef<HTMLInputElement>(null);
+  const refresh = async () => setCVs(await api<SavedCV[]>("/cvs"));
+  useEffect(() => {
+    void refresh().catch((e) => setErrors([errorText(e)]));
+  }, []);
+  async function upload(files: File[]) {
+    if (!files.length || busy) return;
+    setErrors([]);
+    setNotice("");
+    const failures: string[] = [];
+    let saved = 0;
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      setBusy(`Uploading ${i + 1} of ${files.length}: ${f.name}`);
+      try {
+        if (f.size > 10 * 1024 * 1024)
+          throw new Error("Use a file smaller than 10 MB.");
+        const body = new FormData();
+        body.append("file", f);
+        await api("/cvs", "POST", body);
+        saved++;
+      } catch (e) {
+        failures.push(`${f.name}: ${errorText(e)}`);
+      }
+    }
+    try {
+      await refresh();
+    } catch (e) {
+      failures.push(errorText(e));
+    }
+    setErrors(failures);
+    setBusy("");
+    setNotice(
+      `${saved} of ${files.length} files processed. Identical files are kept once. Your career profile is unchanged.`,
+    );
+    if (file.current) file.current.value = "";
+  }
+  async function open(cv: SavedCV) {
+    setErrors([]);
+    try {
+      setReview(await api("/cvs/" + cv.id));
+    } catch (e) {
+      setErrors([errorText(e)]);
+    }
+  }
+  async function saveReview(use: boolean) {
+    if (!review) return;
+    setBusy("Saving CV");
+    setErrors([]);
+    try {
+      const cv = await api<SavedCV & { text: string }>(
+        "/cvs/" + review.id,
+        "PUT",
+        { title: review.title, text: review.text },
+      );
+      await refresh();
+      if (use) onUse(cv);
+      setReview(null);
+      setNotice(
+        use
+          ? "CV added to your profile draft. Review your career facts and save the profile."
+          : "CV saved in your library. Your career profile is unchanged.",
+      );
+    } catch (e) {
+      setErrors([errorText(e)]);
+    } finally {
+      setBusy("");
+    }
+  }
+  return (
+    <section className="surface cv-library" aria-label="CV library">
+      <div className="panel-heading">
+        <h2>
+          Your CV library <span className="muted">({cvs.length})</span>
+        </h2>
+        <span className="chip-label">Stored on this device</span>
+      </div>
+      <p className="muted small">
+        Keep versions for different roles. Review one and choose it as your
+        profile’s starting point. Originals stay available to download.
+      </p>
+      <div
+        className="cv-upload-zone"
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={(e) => {
+          e.preventDefault();
+          void upload(Array.from(e.dataTransfer.files));
+        }}
+      >
+        <button
+          type="button"
+          className="btn"
+          disabled={!!busy}
+          onClick={() => file.current?.click()}
+        >
+          {busy ? <Spinner /> : <Paperclip size={16} />} Upload CVs
+        </button>
+        <p>
+          Choose multiple files or drop them here · PDF, DOCX, TXT, MD · 10 MB
+          each
+        </p>
+        <input
+          type="file"
+          aria-label="Upload CV files"
+          hidden
+          multiple
+          ref={file}
+          accept=".pdf,.docx,.txt,.md"
+          onChange={(e) => void upload(Array.from(e.target.files || []))}
+        />
+      </div>
+      {busy && (
+        <p role="status" className="muted small">
+          {busy}
+        </p>
+      )}
+      {notice && (
+        <p role="status" className="notice">
+          {notice}
+        </p>
+      )}
+      {!review && errors.map((e) => <Alert key={e}>{e}</Alert>)}
+      {cvs.length > 0 && (
+        <>
+          <input
+            className="input"
+            aria-label="Search CV library"
+            placeholder="Find a CV by name…"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+          />
+          <div className="cv-list">
+            {cvs
+              .filter((c) =>
+                (c.title + c.filename)
+                  .toLowerCase()
+                  .includes(filter.toLowerCase()),
+              )
+              .map((cv) => (
+                <div className="cv-row" key={cv.id}>
+                  <FileText size={20} />
+                  <div>
+                    <b>{cv.title}</b>
+                    <p>
+                      {cv.filename} · {shortDate(cv.created)}
+                      {activeId === cv.id ? " · Selected for profile" : ""}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={!!busy}
+                    onClick={() => void open(cv)}
+                  >
+                    Review CV
+                  </button>
+                </div>
+              ))}
+          </div>
+        </>
+      )}
+      {review && (
+        <Modal title="Review your CV" onClose={() => !busy && setReview(null)}>
+          <Field label="CV name">
+            <input
+              className="input"
+              value={review.title}
+              maxLength={200}
+              onChange={(e) => setReview({ ...review, title: e.target.value })}
+            />
+          </Field>
+          <Field
+            label="CV text"
+            hint="Check extracted text before using it. Edits change this library copy; the original file is preserved."
+          >
+            <textarea
+              className="textarea import-review"
+              maxLength={50000}
+              value={review.text}
+              onChange={(e) => setReview({ ...review, text: e.target.value })}
+            />
+          </Field>
+          {errors.map((e) => (
+            <Alert key={e}>{e}</Alert>
+          ))}
+          {activeId !== review.id && (
+            <p className="muted small">
+              Using this CV replaces the career facts in your unsaved profile
+              form. Save your profile to apply the change.
+            </p>
+          )}
+          <div className="modal-actions">
+            <button
+              className="btn"
+              disabled={!!busy}
+              onClick={() =>
+                void download(
+                  `/cvs/${review.id}/original`,
+                  review.filename,
+                ).catch((e) => setErrors([errorText(e)]))
+              }
+            >
+              Download original
+            </button>
+            <button
+              className="btn"
+              disabled={!!busy || !review.text.trim() || !review.title.trim()}
+              onClick={() => void saveReview(false)}
+            >
+              Save CV
+            </button>
+            <button
+              className="btn primary"
+              disabled={!!busy || !review.text.trim() || !review.title.trim()}
+              onClick={() => void saveReview(true)}
+            >
+              Use as profile
+            </button>
+          </div>
+        </Modal>
+      )}
+    </section>
+  );
+}
+
 function ProfilePage({
   initial,
   refresh,
@@ -1127,39 +1404,34 @@ function ProfilePage({
   initial: Profile;
   refresh: () => Promise<void>;
 }) {
+  const [savedForm, setSavedForm] = useState(initial);
   const [form, setForm] = useState(initial),
     [error, setError] = useState(""),
     [note, setNote] = useState(""),
-    [busy, setBusy] = useState(""),
-    [imported, setImported] = useState<{
-      text: string;
-      filename: string;
-    } | null>(null);
-  const file = useRef<HTMLInputElement>(null);
+    [busy, setBusy] = useState("");
+  const dirty = JSON.stringify(form) !== JSON.stringify(savedForm);
+  useEffect(() => {
+    const warn = (event: BeforeUnloadEvent) => {
+      if (dirty) {
+        event.preventDefault();
+        event.returnValue = "";
+      }
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [dirty]);
   const update = (key: keyof Profile, value: string) => {
     setForm((f) => ({ ...f, [key]: value }));
     setNote("");
   };
-  async function upload(f: File) {
-    setBusy("import");
-    setError("");
-    try {
-      const body = new FormData();
-      body.append("file", f);
-      setImported(await api("/profile/import", "POST", body));
-    } catch (e) {
-      setError(errorText(e));
-    } finally {
-      setBusy("");
-      if (file.current) file.current.value = "";
-    }
-  }
   async function save(e: FormEvent) {
     e.preventDefault();
     setBusy("save");
     setError("");
     try {
-      await api("/profile", "PUT", form);
+      const saved = await api<Profile>("/profile", "PUT", form);
+      setForm(saved);
+      setSavedForm(saved);
       await refresh();
       setNote("Your profile is saved. New replies will use these facts.");
     } catch (e) {
@@ -1175,28 +1447,22 @@ function ProfilePage({
         title="A strong starting point."
         description="Keep the facts accurate. Your assistant will help with how you tell them."
       />
+      <CVLibrary
+        activeId={form.source_cv_id}
+        onUse={(cv) => {
+          setForm((f) => ({ ...f, facts: cv.text, source_cv_id: cv.id }));
+          setNote(
+            "Selected CV added to your draft. Save profile to use it in new conversations.",
+          );
+        }}
+      />
       <div className="two-column">
         <form className="surface form-panel" onSubmit={save}>
           <div className="panel-heading">
             <h2>Career profile</h2>
-            <button
-              type="button"
-              className="btn"
-              disabled={!!busy}
-              onClick={() => file.current?.click()}
-            >
-              {busy === "import" ? <Spinner /> : <Paperclip size={16} />} Import
-              CV
-            </button>
-            <input
-              type="file"
-              hidden
-              ref={file}
-              accept=".pdf,.docx,.txt,.md"
-              onChange={(e) =>
-                e.target.files?.[0] && void upload(e.target.files[0])
-              }
-            />
+            <span className="chip-label" role="status">
+              {dirty ? "Unsaved changes" : "Saved profile"}
+            </span>
           </div>
           <Field label="Your name">
             <input
@@ -1213,11 +1479,37 @@ function ProfilePage({
           >
             <textarea
               className="textarea"
-              rows={15}
+              rows={10}
               maxLength={50000}
               placeholder="Paste your CV, or describe your experience…"
               value={form.facts}
               onChange={(e) => update("facts", e.target.value)}
+            />
+          </Field>
+          <Field
+            label="LinkedIn profile link"
+            hint="Add your profile URL. The app does not sign in to LinkedIn or read the link automatically."
+          >
+            <input
+              type="url"
+              className="input"
+              maxLength={1000}
+              value={form.linkedin_url || ""}
+              placeholder="https://www.linkedin.com/in/your-name"
+              onChange={(e) => update("linkedin_url", e.target.value)}
+            />
+          </Field>
+          <Field
+            label="LinkedIn profile text"
+            hint="Paste your About and Experience sections, or upload a LinkedIn PDF to your CV library. Only supplied text is used by the assistant."
+          >
+            <textarea
+              className="textarea"
+              rows={5}
+              maxLength={20000}
+              value={form.linkedin_text || ""}
+              onChange={(e) => update("linkedin_text", e.target.value)}
+              placeholder="Paste the profile details you want your assistant to use…"
             />
           </Field>
           <Field
@@ -1306,40 +1598,6 @@ function ProfilePage({
           </button>
         </aside>
       </div>
-      {imported && (
-        <Modal title="Review imported CV" onClose={() => setImported(null)}>
-          <p className="muted small">
-            {imported.filename} · Check extraction accuracy before adding these
-            facts.
-          </p>
-          <textarea
-            className="textarea import-review"
-            aria-label="Imported CV text"
-            value={imported.text}
-            onChange={(e) => setImported({ ...imported, text: e.target.value })}
-          />
-          <div className="modal-actions">
-            <button className="btn" onClick={() => setImported(null)}>
-              Cancel
-            </button>
-            <button
-              className="btn primary"
-              onClick={() => {
-                update(
-                  "facts",
-                  (form.facts ? form.facts + "\n\n" : "") + imported.text,
-                );
-                setImported(null);
-                setNote(
-                  "Imported text added to the form. Review it, then Save profile.",
-                );
-              }}
-            >
-              Add to profile form
-            </button>
-          </div>
-        </Modal>
-      )}
     </>
   );
 }

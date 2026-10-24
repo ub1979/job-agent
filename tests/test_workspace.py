@@ -227,3 +227,39 @@ def test_settings_are_job_local(client):
     assert client.put('/api/settings', headers=HEADERS, json=selected).status_code == 200
     assert client.get('/api/bootstrap').json()['settings'] == selected
     assert client.post('/api/settings/test', headers=HEADERS, json=selected).json()['ok']
+
+
+def test_cv_library_keeps_originals_and_profile_separate(client):
+    first = client.post('/api/cvs', headers=HEADERS, files={'file': ('leadership.txt', b'Led AI strategy.', 'text/plain')})
+    second = client.post('/api/cvs', headers=HEADERS, files={'file': ('technical.txt', b'Built ML platforms.', 'text/plain')})
+    assert first.status_code == second.status_code == 200
+    one, two = first.json(), second.json()
+    assert one['id'] != two['id']
+    assert len(client.get('/api/cvs').json()) == 2
+    assert not client.get('/api/bootstrap').json()['profile']['facts']
+    duplicate = client.post('/api/cvs', headers=HEADERS, files={'file': ('copy.txt', b'Led AI strategy.', 'text/plain')}).json()
+    assert duplicate['id'] == one['id']
+    assert len(client.get('/api/cvs').json()) == 2
+    edited = client.put('/api/cvs/' + one['id'], headers=HEADERS, json={'title': 'Leadership CV', 'text': 'Reviewed AI leadership facts.'})
+    assert edited.status_code == 200
+    assert client.get('/api/cvs/' + one['id'] + '/original').content == b'Led AI strategy.'
+    saved = client.put('/api/profile', headers=HEADERS, json={'facts': edited.json()['text'], 'source_cv_id': one['id'],
+        'linkedin_url': 'https://www.linkedin.com/in/alex-example', 'linkedin_text': 'Led AI strategy.'})
+    assert saved.status_code == 200
+    # Further library edits cannot silently replace the selected profile snapshot.
+    client.put('/api/cvs/' + one['id'], headers=HEADERS, json={'title': 'New edition', 'text': 'Other facts.'})
+    profile = client.get('/api/bootstrap').json()['profile']
+    assert profile['facts'] == 'Reviewed AI leadership facts.'
+    assert profile['linkedin_url'].endswith('/alex-example')
+    backup = zipfile.ZipFile(io.BytesIO(client.get('/api/export').content))
+    assert backup.read(f'cv-library/{one["id"]}/leadership.txt') == b'Led AI strategy.'
+    assert backup.read(f'cv-library/{two["id"]}/technical.txt') == b'Built ML platforms.'
+
+
+def test_bad_upload_and_linkedin_link_preserve_profile(client):
+    client.put('/api/profile', headers=HEADERS, json={'facts': 'Existing facts.'})
+    assert client.post('/api/cvs', headers=HEADERS, files={'file': ('empty.pdf', b'bad', 'application/pdf')}).status_code == 400
+    assert not client.get('/api/cvs').json()
+    for url in ['https://linkedin.com.evil.test/in/name', 'javascript:alert(1)', 'https://linkedin.com/jobs/view/123']:
+        assert client.put('/api/profile', headers=HEADERS, json={'linkedin_url': url}).status_code == 422
+    assert client.get('/api/bootstrap').json()['profile']['facts'] == 'Existing facts.'

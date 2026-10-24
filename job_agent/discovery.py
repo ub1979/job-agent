@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import pycountry
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from .sources import clean_posting, location_filter, search_alternatives, search_jobs, title_terms
@@ -77,14 +78,20 @@ def is_job_lead(title, url):
 
 def web_tasks(alternatives, locations, work_mode):
     places = [p.strip() for p in locations.split(',') if p.strip() and location_filter(p)]
-    where = (' (' + ' OR '.join('"' + p.replace('"', '') + '"' for p in places) + ')') if places else ''
+    def place_name(place):
+        facet = location_filter(place)
+        if facet and facet[0] == 'countries':
+            return pycountry.countries.get(alpha_2=facet[1].upper()).name
+        return place.replace('"', '')
     arrangement = '' if work_mode == 'any' else ' ' + {'onsite': '"on site"'}.get(work_mode, work_mode)
     tasks = []
     for term in alternatives:
         term = term.replace('"', '')
         phrase = f'"{term}"'
-        for label, scope in WEB_GROUPS.items():
-            tasks.append((label, f'{phrase}{where}{arrangement} {scope}'))
+        for place in places or ['']:
+            where = ' ' + place_name(place) if place else ''
+            for label, scope in WEB_GROUPS.items():
+                tasks.append((label, f'{phrase}{where}{arrangement} {scope}'))
     return tasks
 
 
@@ -92,7 +99,7 @@ def discover_jobs(query, locations, work_mode, days, match_mode='title', sources
     alternatives = search_alternatives(query)
     if len([p for p in locations.split(',') if p.strip()]) > 5:
         raise ValueError('Search up to five locations at once.')
-    jobs, errors, reports, seen = [], [], [], set()
+    jobs, errors, reports, seen, rejected = [], [], [], set(), set()
     filtered = 0
 
     def add(job):
@@ -132,7 +139,7 @@ def discover_jobs(query, locations, work_mode, days, match_mode='title', sources
                 # Ignore publisher/company text after “at” or a vertical bar.
                 role = re.split(r'\s+(?:at|bei|chez)\s+|\s*\|\s*', title, maxsplit=1, flags=re.I)[0]
                 if not is_job_lead(title, key) or (match_mode == 'title' and not any(title_terms(t) <= title_terms(role) for t in alternatives)):
-                    filtered += 1
+                    rejected.add(key)
                     continue
                 snippet, _ = clean_posting(str(hit.get('body') or hit.get('description') or ''))
                 host = urlsplit(url).hostname or 'Web'
@@ -142,11 +149,12 @@ def discover_jobs(query, locations, work_mode, days, match_mode='title', sources
                      'description': 'PUBLIC WEB SEARCH EXCERPT — not a verified full posting. '
                                     'Confirm the role is still open, posting date, location and work arrangement on the original page.\n\n' + snippet})
                 matches += 1
-            reports.append({'name': label, 'status': 'unavailable' if error else 'searched',
+            reports.append({'name': label, 'status': 'unavailable' if error else ('searched' if hits else 'no_results'),
                             'matches': matches, 'queries': [text]})
     web_note = (' Web results are search-index leads, not direct searches inside each site. '
                 'Your location and work preference guide the query; dates, eligibility and open status remain unverified. '
                 'The date filter applies only to Freehire.' if sources != 'freehire' else '')
+    filtered += len(rejected)
     return {'jobs': jobs, 'errors': list(dict.fromkeys(errors)), 'source': 'Multiple sources' if sources == 'all' else sources,
             'source_reports': reports, 'filtered_out': filtered, 'queries': alternatives, 'match_mode': match_mode,
             'coverage': f'{filtered} unrelated candidates hidden. Results deduplicated by posting URL. '

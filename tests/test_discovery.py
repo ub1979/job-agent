@@ -28,7 +28,7 @@ def test_multisource_discovery_filters_deduplicates_and_labels(monkeypatch):
     assert lead['posted'] is None and lead['work_mode'] == ''
     assert 'not a verified full posting' in lead['description']
     assert 'date filter applies only to Freehire' in result['coverage']
-    assert len(result['source_reports']) == 7
+    assert len(result['source_reports']) == 13
     assert not result['errors']
 
 
@@ -53,8 +53,9 @@ def test_freehire_only_does_not_call_web(monkeypatch):
 
 def test_web_queries_cover_alternatives_and_locations_without_region_lock():
     tasks = web_tasks(['Head of AI', 'Director of AI'], 'London, Germany', 'remote')
-    assert len(tasks) == 6
-    assert all('"London" OR "Germany"' in text and 'remote' in text for _, text in tasks)
+    assert len(tasks) == 12
+    assert all(('London' in text or 'Germany' in text) and 'remote' in text for _, text in tasks)
+    assert all('"London" OR' not in text for _, text in tasks)
     assert all('Head of AI' in text or 'Director of AI' in text for _, text in tasks)
     assert '"Worldwide"' not in web_tasks(['Head of AI'], 'Worldwide', 'any')[0][1]
     assert SearchInput(query='Head of AI').sources == 'all'
@@ -82,3 +83,20 @@ def test_search_worker_timeout_is_actionable(monkeypatch):
 ])
 def test_web_ads_and_listing_pages_are_not_job_leads(title, url):
     assert not is_job_lead(title, url)
+
+
+def test_empty_web_search_is_not_reported_as_outage(monkeypatch):
+    monkeypatch.setattr('job_agent.discovery.web_search', lambda query: [])
+    result = discover_jobs('Head of AI', 'UK, UAE', 'any', 30, sources='web')
+    assert not result['errors']
+    assert all(r['status'] == 'no_results' for r in result['source_reports'])
+    queries = [q for r in result['source_reports'] for q in r['queries']]
+    assert any('United Kingdom' in q for q in queries)
+    assert any('United Arab Emirates' in q for q in queries)
+
+
+def test_repeated_irrelevant_web_hits_are_counted_once(monkeypatch):
+    monkeypatch.setattr('job_agent.discovery.web_search', lambda query: [
+        {'title': 'Head of Year', 'href': 'https://example.com/jobs/123'}])
+    result = discover_jobs('Head of AI or Director of AI', 'UK, UAE', 'any', 30, sources='web')
+    assert result['filtered_out'] == 1

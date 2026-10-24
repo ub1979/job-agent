@@ -13,6 +13,9 @@ export interface Job {
   updated: string;
 }
 export interface Profile {
+  source_cv_id?: string;
+  linkedin_url?: string;
+  linkedin_text?: string;
   name: string;
   facts: string;
   preferences: string;

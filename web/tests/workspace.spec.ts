@@ -116,6 +116,7 @@ test("search defaults to matching titles", async ({ page }) => {
         errors: [],
         source: "Freehire",
         coverage: "5 unrelated candidates hidden.",
+        filtered_out: 5,
       },
     });
   });
@@ -125,7 +126,9 @@ test("search defaults to matching titles", async ({ page }) => {
     .getByPlaceholder("e.g. Head of AI or Director of AI")
     .fill("Head of AI or Director of AI");
   await page.locator("form").getByRole("button", { name: "Find jobs" }).click();
-  await expect(page.getByText("5 unrelated candidates hidden.")).toBeVisible();
+  await expect(
+    page.getByText("5 unrelated results filtered · Duplicate links removed"),
+  ).toBeVisible();
   expect(requests[0].query).toBe("Head of AI or Director of AI");
   expect(requests[0].match_mode).toBe("title");
   expect(requests[0].sources).toBe("all");
@@ -135,4 +138,131 @@ test("search defaults to matching titles", async ({ page }) => {
   await page.locator("form").getByRole("button", { name: "Find jobs" }).click();
   await expect.poll(() => requests.length).toBe(2);
   expect(requests[1].match_mode).toBe("broad");
+});
+
+test("multiple CVs, review, profile selection and LinkedIn persist", async ({
+  page,
+}) => {
+  await page.goto("/#/profile");
+  await page.getByLabel("Upload CV files").setInputFiles([
+    {
+      name: "leadership.txt",
+      mimeType: "text/plain",
+      buffer: Buffer.from("Led a team delivering AI strategy."),
+    },
+    {
+      name: "technical.txt",
+      mimeType: "text/plain",
+      buffer: Buffer.from("Built machine learning systems."),
+    },
+    {
+      name: "broken.pdf",
+      mimeType: "application/pdf",
+      buffer: Buffer.from("not a PDF"),
+    },
+  ]);
+  await expect(page.getByText(/2 of 3 files processed/)).toBeVisible();
+  await expect(page.getByRole("alert")).toContainText("broken.pdf");
+  await page
+    .locator(".cv-row")
+    .filter({ hasText: "leadership.txt" })
+    .getByRole("button", { name: "Review CV" })
+    .click();
+  await page
+    .getByRole("textbox", { name: "CV name", exact: true })
+    .fill("AI leadership CV");
+  await page
+    .getByRole("textbox", { name: /^CV text/ })
+    .fill("Led a team delivering AI strategy. Reviewed.");
+  await page
+    .getByRole("button", { name: "Use as profile", exact: true })
+    .click();
+  await expect(page.getByLabel("Verified career facts")).toHaveValue(
+    "Led a team delivering AI strategy. Reviewed.",
+  );
+  await page
+    .getByLabel("LinkedIn profile link")
+    .fill("https://www.linkedin.com/in/alex-example");
+  await page
+    .getByLabel("LinkedIn profile text")
+    .fill("AI strategy and technical leadership.");
+  await page.getByRole("button", { name: "Save profile", exact: true }).click();
+  await expect(page.getByText("Your profile is saved.")).toBeVisible();
+  await page.reload();
+  await expect(page.getByLabel("LinkedIn profile link")).toHaveValue(
+    "https://www.linkedin.com/in/alex-example",
+  );
+  await expect(
+    page.locator(".cv-row").filter({ hasText: "AI leadership CV" }),
+  ).toContainText("Selected for profile");
+  await page
+    .locator(".cv-row")
+    .filter({ hasText: "technical.txt" })
+    .getByRole("button", { name: "Review CV" })
+    .click();
+  await expect(page.getByRole("textbox", { name: /^CV text/ })).toHaveValue(
+    "Built machine learning systems.",
+  );
+  await page.getByRole("button", { name: "Close dialog" }).click();
+  await expect(page.getByLabel("Verified career facts")).toHaveValue(
+    "Led a team delivering AI strategy. Reviewed.",
+  );
+});
+
+test("responsive layout audit across main screens", async ({
+  page,
+}, testInfo) => {
+  for (const width of [1440, 1024, 768, 390, 320]) {
+    await page.setViewportSize({ width, height: 1000 });
+    for (const route of ["", "find", "profile", "new", "settings", "jobs"]) {
+      await page.goto("/#/" + route);
+      await expect(page.locator("main")).toBeVisible();
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth <= window.innerWidth,
+        ),
+        `${route} overflows at ${width}`,
+      ).toBe(true);
+      if (route === "find") {
+        const geometry = await page
+          .locator(".search-form .input")
+          .evaluateAll((controls) =>
+            controls.map((el) => {
+              const r = el.getBoundingClientRect();
+              const css = getComputedStyle(el);
+              const c = document.createElement("canvas").getContext("2d")!;
+              c.font = `${css.fontSize} ${css.fontFamily}`;
+              const textWidth =
+                el.tagName === "SELECT"
+                  ? c.measureText(
+                      (el as HTMLSelectElement).selectedOptions[0].text,
+                    ).width
+                  : 0;
+              return {
+                height: r.height,
+                textWidth,
+                space:
+                  r.width -
+                  parseFloat(css.paddingLeft) -
+                  parseFloat(css.paddingRight) -
+                  2,
+              };
+            }),
+          );
+        expect(new Set(geometry.map((c) => c.height)).size).toBe(1);
+        for (const control of geometry)
+          expect(control.textWidth).toBeLessThanOrEqual(control.space);
+        if (width === 1440 || width === 390)
+          await page.screenshot({
+            path: testInfo.outputPath(`search-${width}.png`),
+            fullPage: true,
+          });
+      }
+      if (route === "profile" && width === 1440)
+        await page.screenshot({
+          path: testInfo.outputPath("cv-library.png"),
+          fullPage: true,
+        });
+    }
+  }
 });

@@ -3,6 +3,7 @@ import json
 import os
 import sqlite3
 import uuid
+import hashlib
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,6 +26,10 @@ class Store:
             db.executescript('''
                 PRAGMA journal_mode=WAL;
                 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS cvs (
+                    id TEXT PRIMARY KEY, filename TEXT NOT NULL, title TEXT NOT NULL,
+                    text TEXT NOT NULL, original BLOB NOT NULL, digest TEXT NOT NULL UNIQUE,
+                    created TEXT NOT NULL, updated TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS jobs (
                     id TEXT PRIMARY KEY, title TEXT NOT NULL, company TEXT NOT NULL,
                     location TEXT NOT NULL, url TEXT NOT NULL, description TEXT NOT NULL,
@@ -65,6 +70,36 @@ class Store:
         with self.db() as db:
             row = db.execute('SELECT value FROM kv WHERE key=?', (key,)).fetchone()
             return json.loads(row['value']) if row else default
+
+    def cvs(self):
+        with self.db() as db:
+            return [dict(row) for row in db.execute('SELECT id,filename,title,created,updated FROM cvs ORDER BY updated DESC')]
+
+    def cv(self, cv_id, original=False):
+        with self.db() as db:
+            row = db.execute('SELECT * FROM cvs WHERE id=?', (cv_id,)).fetchone()
+            if not row:
+                raise KeyError('CV not found')
+            result = dict(row)
+            if not original:
+                result.pop('original')
+            result.pop('digest')
+            return result
+
+    def add_cv(self, filename, text, original):
+        digest = hashlib.sha256(original).hexdigest()
+        with self.db() as db:
+            cv_id, stamp = identity(), now()
+            db.execute('INSERT OR IGNORE INTO cvs VALUES (?,?,?,?,?,?,?,?)',
+                       (cv_id, filename, filename, text, original, digest, stamp, stamp))
+            row = db.execute('SELECT id FROM cvs WHERE digest=?', (digest,)).fetchone()
+        return self.cv(row['id'])
+
+    def update_cv(self, cv_id, title, text):
+        self.cv(cv_id)
+        with self.db() as db:
+            db.execute('UPDATE cvs SET title=?,text=?,updated=? WHERE id=?', (title.strip(), text, now(), cv_id))
+        return self.cv(cv_id)
 
     def put(self, key, value):
         with self.db() as db:

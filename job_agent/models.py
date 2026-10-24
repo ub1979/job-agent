@@ -55,6 +55,26 @@ class Profile(BaseModel):
     locations: str = Field(default='', max_length=1000)
     work_mode: Literal['any', 'remote', 'hybrid', 'onsite'] = 'any'
     writing_style: str = Field(default='', max_length=4000)
+    source_cv_id: str = Field(default='', max_length=32)
+    linkedin_url: str = Field(default='', max_length=1000)
+    linkedin_text: str = Field(default='', max_length=20000)
+
+    @field_validator('linkedin_url')
+    @classmethod
+    def linkedin_profile(cls, value):
+        from urllib.parse import urlsplit
+        value = value.strip()
+        if value:
+            p = urlsplit(value)
+            host = (p.hostname or '').lower()
+            if p.scheme != 'https' or not (host == 'linkedin.com' or host.endswith('.linkedin.com')) or not p.path.startswith('/in/') or p.username or p.password:
+                raise ValueError('Use your LinkedIn profile URL, starting with https://www.linkedin.com/in/')
+        return value
+
+
+class CVInput(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    text: str = Field(min_length=1, max_length=50000)
 
 
 class Settings(BaseModel):

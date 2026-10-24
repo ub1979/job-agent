@@ -9,6 +9,8 @@ from pathlib import Path
 import sqlite3
 import sys
 from urllib.parse import urlsplit
+from urllib.parse import quote
+import re
 import zipfile
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
@@ -18,7 +20,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .ai import Assistant, Bridge
 from .documents import export_docx, export_pdf, extract_upload
-from .models import DocumentInput, JobInput, MessageInput, Profile, SearchInput, Settings, StatusInput
+from .models import CVInput, DocumentInput, JobInput, MessageInput, Profile, SearchInput, Settings, StatusInput
 from .sources import clean_posting, import_url
 from .discovery import discover_jobs
 from .store import Store
@@ -113,6 +115,8 @@ def create_app(data_root=None, bridge=None):
 
     @app.put('/api/profile')
     def profile(data: Profile):
+        if data.source_cv_id:
+            store.cv(data.source_cv_id)
         store.put('profile', data.model_dump())
         return data
 
@@ -131,6 +135,39 @@ def create_app(data_root=None, bridge=None):
     @app.get('/api/jobs')
     def jobs():
         return store.jobs()
+
+    @app.get('/api/cvs')
+    def cvs():
+        return store.cvs()
+
+    @app.post('/api/cvs')
+    async def upload_cv(file: UploadFile = File(...)):
+        content = await file.read(10 * 1024 * 1024 + 1)
+        filename = re.sub(r'[\x00-\x1f/\\]', '_', file.filename or 'CV.txt')[-180:]
+        try:
+            text = await asyncio.to_thread(extract_upload, filename, content)
+            text, _ = clean_posting(text)
+        except (ValueError, UnicodeError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(400, 'This CV could not be read. Use a text-based PDF, DOCX or text file.') from exc
+        return store.add_cv(filename, text, content)
+
+    @app.get('/api/cvs/{cv_id}')
+    def cv(cv_id: str):
+        return store.cv(cv_id)
+
+    @app.put('/api/cvs/{cv_id}')
+    def edit_cv(cv_id: str, data: CVInput):
+        if not data.title.strip() or not data.text.strip():
+            raise ValueError('Add a name and readable CV text.')
+        return store.update_cv(cv_id, data.title, data.text)
+
+    @app.get('/api/cvs/{cv_id}/original')
+    def original_cv(cv_id: str):
+        cv = store.cv(cv_id, original=True)
+        return Response(cv['original'], media_type='application/octet-stream',
+                        headers={'Content-Disposition': "attachment; filename*=UTF-8''" + quote(cv['filename'])})
 
     @app.post('/api/jobs')
     def create_job(data: JobInput, allow_duplicate: bool = False):
@@ -219,6 +256,11 @@ def create_app(data_root=None, bridge=None):
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as archive:
             archive.writestr('profile.json', json.dumps(store.get('profile', {}), ensure_ascii=False, indent=2))
+            for summary in store.cvs():
+                cv = store.cv(summary['id'], original=True)
+                original = cv.pop('original')
+                archive.writestr(f'cv-library/{cv["id"]}/record.json', json.dumps(cv, ensure_ascii=False, indent=2))
+                archive.writestr(f'cv-library/{cv["id"]}/{cv["filename"]}', original)
             archive.writestr('general-chat.json', json.dumps(store.messages('general'), ensure_ascii=False, indent=2))
             jobs = store.jobs()
             archive.writestr('jobs.json', json.dumps(jobs, ensure_ascii=False, indent=2))
