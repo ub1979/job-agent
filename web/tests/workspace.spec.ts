@@ -332,7 +332,9 @@ test("online research consent and approval keep findings outside library until r
   ).toBeVisible();
 });
 
-test("profile explains pending approval and enables analysis after review", async ({ page }, testInfo) => {
+test("profile explains pending approval and enables analysis after review", async ({
+  page,
+}, testInfo) => {
   let approved = false;
   await page.route("**/api/profile/readiness", async (route) => {
     await route.fulfill({
@@ -361,8 +363,10 @@ test("profile explains pending approval and enables analysis after review", asyn
     .filter({ hasText: "readiness.txt" })
     .getByRole("button", { name: "Review document" })
     .click();
-  await expect(page.getByRole('button', {name:'Approve for AI use',exact:true})).toBeInViewport();
-  await page.screenshot({path:'/private/tmp/job-agent-approve-button.png'});
+  await expect(
+    page.getByRole("button", { name: "Approve for AI use", exact: true }),
+  ).toBeInViewport();
+  await page.screenshot({ path: "/private/tmp/job-agent-approve-button.png" });
   await page
     .getByRole("button", { name: "Approve for AI use", exact: true })
     .click();
@@ -372,4 +376,30 @@ test("profile explains pending approval and enables analysis after review", asyn
   await expect(
     page.getByText("Ready to analyse · 1 approved documents"),
   ).toBeVisible();
+  const row = page.locator(".cv-row").filter({ hasText: "readiness.txt" });
+  await expect(row.locator(".approval-badge")).toHaveText("Approved for AI");
+  await page.reload();
+  await expect(row.locator(".approval-badge")).toHaveText("Approved for AI");
+  await page
+    .getByLabel("Upload CV files")
+    .setInputFiles({
+      name: "awaiting.txt",
+      mimeType: "text/plain",
+      buffer: Buffer.from("Another document awaiting review."),
+    });
+  await expect(
+    page
+      .locator(".cv-row")
+      .filter({ hasText: "awaiting.txt" })
+      .locator(".approval-badge"),
+  ).toHaveText("Needs approval");
+  await page.screenshot({
+    path: "/private/tmp/job-agent-approval-status.png",
+    fullPage: true,
+  });
+  await row.getByRole("button", { name: "Review document" }).click();
+  await page
+    .getByRole("button", { name: "Remove AI approval", exact: true })
+    .click();
+  await expect(row.locator(".approval-badge")).toHaveText("Needs approval");
 });

@@ -1333,6 +1333,16 @@ function CVLibrary({
       {!review && errors.map((e) => <Alert key={e}>{e}</Alert>)}
       {cvs.length > 0 && (
         <>
+          <p className="library-approval-summary" role="status">
+            <span>
+              <CheckCircle2 size={16} />{" "}
+              {cvs.filter((cv) => cv.approved).length} approved
+            </span>
+            <span>
+              <Clock3 size={16} /> {cvs.filter((cv) => !cv.approved).length}{" "}
+              awaiting approval
+            </span>
+          </p>
           <input
             className="input"
             aria-label="Search CV library"
@@ -1351,11 +1361,25 @@ function CVLibrary({
                 <div className="cv-row" key={cv.id}>
                   <FileText size={20} />
                   <div>
-                    <b>{cv.title}</b>
+                    <div className="cv-title-row">
+                      <b>{cv.title}</b>
+                      <span
+                        className={
+                          "approval-badge " +
+                          (cv.approved ? "approved" : "pending")
+                        }
+                      >
+                        {cv.approved ? (
+                          <CheckCircle2 size={14} />
+                        ) : (
+                          <Clock3 size={14} />
+                        )}
+                        {cv.approved ? "Approved for AI" : "Needs approval"}
+                      </span>
+                    </div>
                     <p>
                       {cv.filename} · {shortDate(cv.created)} ·{" "}
-                      {sourceKinds[cv.kind || "cv"]} ·{" "}
-                      {cv.approved ? "Approved for AI" : "Needs review"}
+                      {sourceKinds[cv.kind || "cv"]}
                       {activeId === cv.id ? " · Selected for profile" : ""}
                     </p>
                   </div>
