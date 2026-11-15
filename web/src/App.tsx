@@ -294,19 +294,21 @@ export function App() {
             "main " + (route.startsWith("/job/") ? "conversation-main" : "")
           }
         >
+          <div hidden={route !== "/find"}>
+            <FindJobs
+              active={route === "/find"}
+              profile={data.profile}
+              jobs={data.jobs}
+              refresh={refresh}
+            />
+          </div>
           {route === "/" ? (
             <Home data={data} />
           ) : route === "/jobs" ? (
             <Jobs jobs={data.jobs} refresh={refresh} />
           ) : route === "/new" ? (
             <NewJob jobs={data.jobs} refresh={refresh} />
-          ) : route === "/find" ? (
-            <FindJobs
-              profile={data.profile}
-              jobs={data.jobs}
-              refresh={refresh}
-            />
-          ) : route === "/profile" ? (
+          ) : route === "/find" ? null : route === "/profile" ? (
             <ProfilePage initial={data.profile} refresh={refresh} />
           ) : route === "/settings" ? (
             <SettingsPage initial={data.settings} refresh={refresh} />
@@ -813,10 +815,12 @@ function NewJob({
 }
 
 function FindJobs({
+  active,
   profile,
   jobs,
   refresh,
 }: {
+  active: boolean;
   profile: Profile;
   jobs: Job[];
   refresh: () => Promise<void>;
@@ -832,6 +836,7 @@ function FindJobs({
         posted?: string;
         work_mode?: string;
         verification?: string;
+        fit?: { score: number | null; matched_terms: string[]; basis: string };
       })[];
       errors: string[];
       coverage: string;
@@ -847,6 +852,88 @@ function FindJobs({
     [error, setError] = useState(""),
     [saving, setSaving] = useState(""),
     [expanded, setExpanded] = useState("");
+  const [sort, setSort] = useState(
+    () => localStorage.getItem("job-search-sort") || "source",
+  );
+  const [suggesting, setSuggesting] = useState(false),
+    [suggestion, setSuggestion] = useState("");
+  const [restoring, setRestoring] = useState(true);
+  useEffect(() => {
+    let mounted = true;
+    void api<{
+      form: {
+        query: string;
+        locations: string;
+        work_mode: string;
+        match_mode: string;
+        sources: string;
+        days: number;
+      };
+      result: NonNullable<typeof result>;
+    } | null>("/search/state")
+      .then((saved) => {
+        if (!mounted || !saved) return;
+        setQuery(saved.form.query);
+        setLocations(saved.form.locations);
+        setMode(saved.form.work_mode);
+        setMatchMode(saved.form.match_mode);
+        setSources(saved.form.sources);
+        setDays(saved.form.days);
+        setResult(saved.result);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (mounted) setRestoring(false);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+  async function suggestRoles() {
+    setSuggesting(true);
+    setError("");
+    try {
+      const plan = await api<{ roles: string[]; rationale: string }>(
+        "/search/suggest",
+        "POST",
+        {},
+      );
+      setQuery(plan.roles.join(" or "));
+      setSuggestion(plan.rationale);
+      setSort("fit");
+      localStorage.setItem("job-search-sort", "fit");
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setSuggesting(false);
+    }
+  }
+  const sortedJobs = [...(result?.jobs || [])].sort((a, b) =>
+    sort === "fit"
+      ? (b.fit?.score ?? -1) - (a.fit?.score ?? -1)
+      : sort === "newest"
+        ? (Date.parse(b.posted || "") || 0) - (Date.parse(a.posted || "") || 0)
+        : 0,
+  );
+  const searchScroll = useRef(0);
+  useEffect(() => {
+    if (!active) return;
+    const frame = requestAnimationFrame(() =>
+      window.scrollTo(0, searchScroll.current),
+    );
+    const remember = () => {
+      searchScroll.current = window.scrollY;
+    };
+    window.addEventListener("scroll", remember);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener("scroll", remember);
+    };
+  }, [active]);
+  function openSearchJob(id: string) {
+    sessionStorage.setItem("job-search-opened-job", id);
+    go("/job/" + id);
+  }
   async function search(e: FormEvent) {
     e.preventDefault();
     setBusy(true);
@@ -875,7 +962,7 @@ function FindJobs({
     try {
       const j = await api<Job>("/jobs", "POST", job);
       await refresh();
-      go("/job/" + j.id);
+      openSearchJob(j.id);
     } catch (e) {
       if (
         e instanceof ApiError &&
@@ -883,7 +970,7 @@ function FindJobs({
         e.detail &&
         "job_id" in e.detail
       ) {
-        go("/job/" + e.detail.job_id);
+        openSearchJob(String(e.detail.job_id));
       } else {
         setError(errorText(e));
       }
@@ -898,6 +985,33 @@ function FindJobs({
         title="Good opportunities. Your terms."
         description="Search across locations, then choose the roles worth a conversation."
       />
+      <div className="surface profile-search-panel">
+        <div>
+          <h2>Find roles from your profile</h2>
+          <p>
+            Review your saved profile and approved documents with your AI
+            connection, then suggest suitable search titles. Check the
+            suggestions before searching.
+          </p>
+        </div>
+        <button
+          className="btn"
+          disabled={suggesting || busy || restoring}
+          onClick={() => void suggestRoles()}
+        >
+          {suggesting ? <Spinner /> : <Sparkles size={17} />}{" "}
+          {suggesting
+            ? "Reviewing your profile…"
+            : "Suggest roles from my profile"}
+        </button>
+      </div>
+      {suggestion && (
+        <div className="notice" role="status">
+          <b>Suggested search ready</b>
+          <p>{suggestion}</p>
+          <p>Adjust the roles below or click Find jobs.</p>
+        </div>
+      )}
       <form className="surface search-form" onSubmit={search}>
         <div className="search-primary">
           <Field label="Roles or skills">
@@ -972,7 +1086,10 @@ function FindJobs({
             <br />
             Date filtering applies to Freehire; check dates on web listings.
           </p>
-          <button className="btn primary" disabled={busy}>
+          <button
+            className="btn primary"
+            disabled={busy || restoring || suggesting}
+          >
             {busy ? <Spinner /> : <Search size={17} />}
             {busy ? "Searching…" : "Find jobs"}
           </button>
@@ -1047,9 +1164,34 @@ function FindJobs({
               Review each original posting before applying
             </span>
           </div>
+          <div className="results-sort">
+            <Field label="Sort opportunities">
+              <select
+                className="input"
+                value={sort}
+                onChange={(e) => {
+                  setSort(e.target.value);
+                  localStorage.setItem("job-search-sort", e.target.value);
+                }}
+              >
+                <option value="source">Source order</option>
+                <option value="fit">Best fit to my profile</option>
+                <option value="newest">Newest posted</option>
+              </select>
+            </Field>
+            {sort === "fit" && (
+              <p>
+                Ranks shared terms in job titles and descriptions against
+                approved career evidence. It does not verify every requirement
+                or predict hiring outcomes.
+                {!result.jobs.some((j) => j.fit?.score != null) &&
+                  " Approve documents or save career facts, then search again to enable matching."}
+              </p>
+            )}
+          </div>
           {result.jobs.length ? (
             <div className="search-results">
-              {result.jobs.map((j, i) => {
+              {sortedJobs.map((j, i) => {
                 const saved = jobs.find((x) => x.url === j.url && !x.archived);
                 return (
                   <article className="surface search-result" key={j.url}>
@@ -1087,6 +1229,16 @@ function FindJobs({
                       {j.description ||
                         "Open the original posting for the full description."}
                     </p>
+                    {sort === "fit" && j.fit && (
+                      <p className="fit-reasons">
+                        {j.fit.matched_terms.length
+                          ? "Shared evidence: " + j.fit.matched_terms.join(", ")
+                          : "No clear shared evidence found."}
+                        {j.verification === "web_lead"
+                          ? " Based on a web excerpt; check the full posting."
+                          : ""}
+                      </p>
+                    )}
                     <div className="result-actions">
                       <button
                         className="text-button"
@@ -1108,7 +1260,7 @@ function FindJobs({
                         className="btn primary"
                         disabled={saving === j.url}
                         onClick={() =>
-                          saved ? go("/job/" + saved.id) : void save(j)
+                          saved ? openSearchJob(saved.id) : void save(j)
                         }
                       >
                         {saving === j.url ? (
@@ -2387,8 +2539,18 @@ function Chat({
       <div className="conversation-heading">
         <button
           className="icon-button"
-          aria-label="Back to jobs"
-          onClick={() => go("/jobs")}
+          aria-label={
+            sessionStorage.getItem("job-search-opened-job") === id
+              ? "Back to search results"
+              : "Back to jobs"
+          }
+          onClick={() =>
+            go(
+              sessionStorage.getItem("job-search-opened-job") === id
+                ? "/find"
+                : "/jobs",
+            )
+          }
         >
           <ArrowLeft size={19} />
         </button>

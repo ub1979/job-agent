@@ -380,13 +380,11 @@ test("profile explains pending approval and enables analysis after review", asyn
   await expect(row.locator(".approval-badge")).toHaveText("Approved for AI");
   await page.reload();
   await expect(row.locator(".approval-badge")).toHaveText("Approved for AI");
-  await page
-    .getByLabel("Upload CV files")
-    .setInputFiles({
-      name: "awaiting.txt",
-      mimeType: "text/plain",
-      buffer: Buffer.from("Another document awaiting review."),
-    });
+  await page.getByLabel("Upload CV files").setInputFiles({
+    name: "awaiting.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.from("Another document awaiting review."),
+  });
   await expect(
     page
       .locator(".cv-row")
@@ -402,4 +400,98 @@ test("profile explains pending approval and enables analysis after review", asyn
     .getByRole("button", { name: "Remove AI approval", exact: true })
     .click();
   await expect(row.locator(".approval-badge")).toHaveText("Needs approval");
+});
+
+test("search survives opening jobs and reload, with profile suggestions and fit sorting", async ({
+  page,
+}) => {
+  let snapshot: unknown = null,
+    searches = 0;
+  await page.route("**/api/search/state", (route) =>
+    route.fulfill({ json: snapshot }),
+  );
+  await page.route("**/api/search/suggest", (route) =>
+    route.fulfill({
+      json: {
+        roles: ["Head of AI", "Director of AI"],
+        rationale: "Leadership evidence from your approved Industry CV.",
+      },
+    }),
+  );
+  await page.route("**/api/search", async (route) => {
+    searches++;
+    const result = {
+      jobs: [
+        {
+          title: "Director of AI Platforms",
+          company: "Example A",
+          url: "https://example.com/search-low",
+          description: "Platform leadership",
+          location: "UK",
+          source: "test",
+          deadline: "",
+          fit: { score: 2, matched_terms: ["platform"], basis: "Text overlap" },
+        },
+        {
+          title: "Head of AI Research",
+          company: "Example B",
+          url: "https://example.com/search-high",
+          description: "Research leadership",
+          location: "UK",
+          source: "test",
+          deadline: "",
+          fit: {
+            score: 20,
+            matched_terms: ["research", "leadership"],
+            basis: "Text overlap",
+          },
+        },
+      ],
+      errors: [],
+      coverage: "Test results",
+      filtered_out: 0,
+    };
+    snapshot = { form: route.request().postDataJSON(), result };
+    await route.fulfill({ json: result });
+  });
+  await page.goto("/#/find");
+  await page
+    .getByRole("button", { name: "Suggest roles from my profile" })
+    .click();
+  await expect(
+    page.getByPlaceholder("e.g. Head of AI or Director of AI"),
+  ).toHaveValue("Head of AI or Director of AI");
+  await expect(
+    page.getByText("Leadership evidence from your approved Industry CV."),
+  ).toBeVisible();
+  await page
+    .locator("form.search-form")
+    .getByRole("button", { name: "Find jobs" })
+    .click();
+  await expect(page.locator(".search-result").first()).toContainText(
+    "Head of AI Research",
+  );
+  await page
+    .locator(".search-result")
+    .first()
+    .getByRole("button", { name: "Save & discuss" })
+    .click();
+  await page.getByRole("button", { name: "Back to search results" }).click();
+  await expect(page.locator(".search-result")).toHaveCount(2);
+  await expect(
+    page.getByPlaceholder("e.g. Head of AI or Director of AI"),
+  ).toHaveValue("Head of AI or Director of AI");
+  expect(searches).toBe(1);
+  await page.reload();
+  await expect(page.locator(".search-result")).toHaveCount(2);
+  await expect(page.locator(".search-result").first()).toContainText(
+    "Head of AI Research",
+  );
+  expect(searches).toBe(1);
+  await page
+    .getByRole("combobox", { name: "Sort opportunities" })
+    .selectOption("source");
+  await expect(page.locator(".search-result").first()).toContainText(
+    "Director of AI Platforms",
+  );
 });

@@ -354,3 +354,35 @@ def test_linkedin_text_alone_is_enough_for_profile_analysis(client):
     client.put('/api/profile', headers=HEADERS, json={'linkedin_text': 'Led AI research at Example University.'})
     assert client.get('/api/profile/readiness').json()['ready']
     assert client.post('/api/profile/analyse', headers=HEADERS, json={}).status_code == 200
+
+
+def test_search_snapshot_and_profile_relevance(client, monkeypatch):
+    rows = [{'title': 'AI Research Lecturer', 'description': 'Research machine learning and teach courses.', 'url': 'https://example.com/lecturer'},
+            {'title': 'Operations Manager', 'description': 'Warehousing logistics.', 'url': 'https://example.com/operations'}]
+    monkeypatch.setattr('job_agent.server.discover_jobs', lambda *args: {'jobs': rows, 'errors': [], 'coverage': 'test'})
+    client.put('/api/profile', headers=HEADERS, json={'facts': 'Research machine learning and teach courses.', 'preferences': 'Academic research roles'})
+    response = client.post('/api/search', headers=HEADERS, json={'query': 'Lecturer'}).json()
+    assert response['jobs'][0]['fit']['score'] > response['jobs'][1]['fit']['score']
+    assert 'research' in response['jobs'][0]['fit']['matched_terms']
+    snapshot = client.get('/api/search/state').json()
+    assert snapshot['result'] == response and snapshot['form']['query'] == 'Lecturer'
+
+
+def test_profile_search_suggestions_use_approved_sources_only(client):
+    cv = client.app.state.store.add_cv('industry.txt', 'Led AI engineering teams.', b'approved-evidence')
+    client.app.state.store.update_cv(cv['id'], 'Industry CV', cv['text'], 'industry_cv', True)
+    client.app.state.store.add_cv('private.txt', 'Unreviewed secret content.', b'unreviewed-evidence')
+    def suggest(settings, prompt, **kwargs):
+        assert 'Led AI engineering' in prompt
+        assert 'Unreviewed secret' not in prompt
+        return '{"roles":["Head of AI", "Director of AI"],"rationale":"AI leadership based on Industry CV."}'
+    client.app.state.assistant.bridge.generate = suggest
+    result = client.post('/api/search/suggest', headers=HEADERS, json={})
+    assert result.status_code == 200
+    assert result.json()['roles'] == ['Head of AI', 'Director of AI']
+
+
+def test_profile_search_suggestion_requires_evidence(client):
+    assert client.post('/api/search/suggest', headers=HEADERS, json={}).status_code == 400
+    from job_agent.matching import rank_jobs
+    assert rank_jobs(client.app.state.store, [{'title': 'Lecturer'}])[0]['fit']['score'] is None
