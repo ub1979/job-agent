@@ -16,3 +16,15 @@ data/
 playwright-results/
 test-results/
 playwright-report/
+
+# Private career records and local release backups
+uploads/
+exports/
+backups/
+cv-library/
+profile.json
+*.pdf
+*.docx
+*.doc
+*.bundle
+*.pem
