@@ -1150,7 +1150,21 @@ function FindJobs({
   );
 }
 
+const sourceKinds: Record<string, string> = {
+  cv: "CV",
+  academic_cv: "Academic CV",
+  industry_cv: "Industry CV",
+  publication: "Publication",
+  book: "Book",
+  certificate: "Certificate",
+  portfolio: "Portfolio",
+  other: "Other information",
+  online: "Approved online finding",
+};
 type SavedCV = {
+  kind?: string;
+  approved?: boolean;
+  source_url?: string;
   id: string;
   filename: string;
   title: string;
@@ -1159,9 +1173,11 @@ type SavedCV = {
 };
 function CVLibrary({
   activeId,
+  revision,
   onUse,
 }: {
   activeId?: string;
+  revision?: number;
   onUse: (cv: SavedCV & { text: string }) => void;
 }) {
   const [cvs, setCVs] = useState<SavedCV[]>([]),
@@ -1176,7 +1192,7 @@ function CVLibrary({
   const refresh = async () => setCVs(await api<SavedCV[]>("/cvs"));
   useEffect(() => {
     void refresh().catch((e) => setErrors([errorText(e)]));
-  }, []);
+  }, [revision]);
   async function upload(files: File[]) {
     if (!files.length || busy) return;
     setErrors([]);
@@ -1205,7 +1221,7 @@ function CVLibrary({
     setErrors(failures);
     setBusy("");
     setNotice(
-      `${saved} of ${files.length} files processed. Identical files are kept once. Your career profile is unchanged.`,
+      `${saved} of ${files.length} files processed. Identical files are kept once. Review and approve documents before the assistant uses them.`,
     );
     if (file.current) file.current.value = "";
   }
@@ -1225,7 +1241,12 @@ function CVLibrary({
       const cv = await api<SavedCV & { text: string }>(
         "/cvs/" + review.id,
         "PUT",
-        { title: review.title, text: review.text },
+        {
+          title: review.title,
+          text: review.text,
+          kind: review.kind || "cv",
+          approved: Boolean(review.approved),
+        },
       );
       await refresh();
       if (use) onUse(cv);
@@ -1233,7 +1254,7 @@ function CVLibrary({
       setNotice(
         use
           ? "CV added to your profile draft. Review your career facts and save the profile."
-          : "CV saved in your library. Your career profile is unchanged.",
+          : "Document saved. Only approved documents are used by your assistant.",
       );
     } catch (e) {
       setErrors([errorText(e)]);
@@ -1245,13 +1266,14 @@ function CVLibrary({
     <section className="surface cv-library" aria-label="CV library">
       <div className="panel-heading">
         <h2>
-          Your CV library <span className="muted">({cvs.length})</span>
+          Your career library <span className="muted">({cvs.length})</span>
         </h2>
         <span className="chip-label">Stored on this device</span>
       </div>
       <p className="muted small">
-        Keep versions for different roles. Review one and choose it as your
-        profile’s starting point. Originals stay available to download.
+        Add academic and industry CVs, publications, books, certificates and
+        other evidence. Review each document and approve it for your assistant.
+        Originals remain available to download.
       </p>
       <div
         className="cv-upload-zone"
@@ -1267,7 +1289,7 @@ function CVLibrary({
           disabled={!!busy}
           onClick={() => file.current?.click()}
         >
-          {busy ? <Spinner /> : <Paperclip size={16} />} Upload CVs
+          {busy ? <Spinner /> : <Paperclip size={16} />} Upload documents
         </button>
         <p>
           Choose multiple files or drop them here · PDF, DOCX, TXT, MD · 10 MB
@@ -1299,7 +1321,7 @@ function CVLibrary({
           <input
             className="input"
             aria-label="Search CV library"
-            placeholder="Find a CV by name…"
+            placeholder="Find a document by name…"
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
           />
@@ -1316,7 +1338,9 @@ function CVLibrary({
                   <div>
                     <b>{cv.title}</b>
                     <p>
-                      {cv.filename} · {shortDate(cv.created)}
+                      {cv.filename} · {shortDate(cv.created)} ·{" "}
+                      {sourceKinds[cv.kind || "cv"]} ·{" "}
+                      {cv.approved ? "Approved for AI" : "Needs review"}
                       {activeId === cv.id ? " · Selected for profile" : ""}
                     </p>
                   </div>
@@ -1326,7 +1350,7 @@ function CVLibrary({
                     disabled={!!busy}
                     onClick={() => void open(cv)}
                   >
-                    Review CV
+                    Review document
                   </button>
                 </div>
               ))}
@@ -1334,8 +1358,11 @@ function CVLibrary({
         </>
       )}
       {review && (
-        <Modal title="Review your CV" onClose={() => !busy && setReview(null)}>
-          <Field label="CV name">
+        <Modal
+          title="Review career document"
+          onClose={() => !busy && setReview(null)}
+        >
+          <Field label="Document name">
             <input
               className="input"
               value={review.title}
@@ -1344,16 +1371,52 @@ function CVLibrary({
             />
           </Field>
           <Field
-            label="CV text"
+            label="Document text"
             hint="Check extracted text before using it. Edits change this library copy; the original file is preserved."
           >
             <textarea
               className="textarea import-review"
-              maxLength={50000}
+              maxLength={300000}
               value={review.text}
               onChange={(e) => setReview({ ...review, text: e.target.value })}
             />
           </Field>
+          <Field label="Document type">
+            <select
+              className="input"
+              value={review.kind || "cv"}
+              onChange={(e) => setReview({ ...review, kind: e.target.value })}
+            >
+              {Object.entries(sourceKinds).map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <label className="check-label">
+            <input
+              type="checkbox"
+              checked={Boolean(review.approved)}
+              onChange={(e) =>
+                setReview({ ...review, approved: e.target.checked })
+              }
+            />{" "}
+            I have reviewed this text. Allow my assistant to use it across job
+            conversations.
+          </label>
+          {review.source_url && (
+            <p className="muted small">
+              Source:{" "}
+              <a
+                href={review.source_url}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                View original
+              </a>
+            </p>
+          )}
           {errors.map((e) => (
             <Alert key={e}>{e}</Alert>
           ))}
@@ -1381,14 +1444,235 @@ function CVLibrary({
               disabled={!!busy || !review.text.trim() || !review.title.trim()}
               onClick={() => void saveReview(false)}
             >
-              Save CV
+              Save document
             </button>
             <button
               className="btn primary"
               disabled={!!busy || !review.text.trim() || !review.title.trim()}
               onClick={() => void saveReview(true)}
+              style={
+                !["cv", "academic_cv", "industry_cv"].includes(
+                  review.kind || "cv",
+                ) || review.text.length > 50000
+                  ? { display: "none" }
+                  : undefined
+              }
             >
               Use as profile
+            </button>
+          </div>
+        </Modal>
+      )}
+    </section>
+  );
+}
+
+function CareerResearch({ onAdded }: { onAdded: () => void }) {
+  const [query, setQuery] = useState(""),
+    [consent, setConsent] = useState(false),
+    [busy, setBusy] = useState("");
+  const [error, setError] = useState(""),
+    [analysis, setAnalysis] = useState("");
+  const [candidates, setCandidates] = useState<
+    { id: string; title: string; text: string; url: string }[] | null
+  >(null);
+  const [review, setReview] = useState<{
+    id: string;
+    title: string;
+    text: string;
+    url: string;
+  } | null>(null);
+  async function analyse() {
+    setBusy("analysis");
+    setError("");
+    try {
+      const r = await api<{ analysis: string; truncated: boolean }>(
+        "/profile/analyse",
+        "POST",
+        {},
+      );
+      setAnalysis(
+        r.analysis +
+          (r.truncated
+            ? "\n\nSome documents were represented by excerpts because of the context limit."
+            : ""),
+      );
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy("");
+    }
+  }
+  async function search() {
+    setBusy("research");
+    setError("");
+    setCandidates(null);
+    try {
+      const r = await api<{ candidates: NonNullable<typeof candidates> }>(
+        "/profile/research",
+        "POST",
+        { query, consent },
+      );
+      setCandidates(r.candidates);
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy("");
+    }
+  }
+  async function approve() {
+    if (!review) return;
+    setBusy("approve");
+    setError("");
+    try {
+      await api(`/profile/research/${review.id}/approve`, "POST", {
+        title: review.title,
+        text: review.text,
+        approved: true,
+        kind: "online",
+      });
+      setCandidates((list) => list?.filter((c) => c.id !== review.id) || []);
+      setReview(null);
+      onAdded();
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy("");
+    }
+  }
+  return (
+    <section className="surface cv-library">
+      <div className="panel-heading">
+        <h2>Understand and enrich your profile</h2>
+        <button
+          className="btn"
+          disabled={!!busy}
+          onClick={() => void analyse()}
+        >
+          {busy === "analysis" ? <Spinner /> : <Sparkles size={16} />} Analyse
+          approved information
+        </button>
+      </div>
+      <p className="muted small">
+        Your assistant uses approved library evidence for each job. Analyse it
+        here to review academic and industry strengths, gaps and conflicting
+        facts. Analysis sends approved source excerpts and your saved profile to
+        your selected AI provider.
+      </p>
+      {analysis && (
+        <div className="notice">
+          <Markdown>{analysis}</Markdown>
+        </div>
+      )}
+      <details className="search-details">
+        <summary>
+          Would you like to check your public online information?
+        </summary>
+        <p className="muted small">
+          Enter your name plus an employer, institution or public profile
+          identifier to avoid namesakes. Only the query below is sent to public
+          search services. Your CVs are not uploaded. Results remain unverified
+          until you review them.
+        </p>
+        <Field label="Public profile search">
+          <input
+            className="input"
+            maxLength={250}
+            value={query}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setConsent(false);
+            }}
+            placeholder="Your name, university or employer"
+          />
+        </Field>
+        <label className="check-label">
+          <input
+            type="checkbox"
+            checked={consent}
+            onChange={(e) => setConsent(e.target.checked)}
+          />{" "}
+          I approve searching online using this exact query.
+        </label>
+        <button
+          className="btn"
+          disabled={!!busy || !consent || query.trim().length < 3}
+          onClick={() => void search()}
+        >
+          {busy === "research" ? <Spinner /> : <Globe2 size={16} />} Search
+          public information
+        </button>
+        {candidates && (
+          <p className="muted small">
+            {candidates.length} findings awaiting review. Confirm identity,
+            accuracy and authorship before adding any text.
+          </p>
+        )}
+        {candidates?.map((c) => (
+          <div className="cv-row" key={c.id}>
+            <div>
+              <b>{c.title}</b>
+              <p>{c.text}</p>
+              <a href={c.url} target="_blank" rel="noopener noreferrer">
+                View source
+              </a>
+            </div>
+            <button
+              className="btn"
+              disabled={!!busy}
+              onClick={() => setReview(c)}
+            >
+              Review finding
+            </button>
+          </div>
+        ))}
+      </details>
+      {!review && error && <Alert>{error}</Alert>}
+      {review && (
+        <Modal
+          title="Approve online information"
+          onClose={() => !busy && setReview(null)}
+        >
+          <p>
+            Check that this source describes you. Edit the text to include only
+            facts you confirm. Search excerpts may be incomplete or refer to
+            another person.
+          </p>
+          <a href={review.url} target="_blank" rel="noopener noreferrer">
+            Open source
+          </a>
+          <Field label="Finding title">
+            <input
+              className="input"
+              maxLength={200}
+              value={review.title}
+              onChange={(e) => setReview({ ...review, title: e.target.value })}
+            />
+          </Field>
+          <Field label="Facts I approve">
+            <textarea
+              className="textarea"
+              rows={8}
+              maxLength={50000}
+              value={review.text}
+              onChange={(e) => setReview({ ...review, text: e.target.value })}
+            />
+          </Field>
+          {error && <Alert>{error}</Alert>}
+          <div className="modal-actions">
+            <button
+              className="btn"
+              disabled={!!busy}
+              onClick={() => setReview(null)}
+            >
+              Cancel
+            </button>
+            <button
+              className="btn primary"
+              disabled={!!busy || !review.text.trim() || !review.title.trim()}
+              onClick={() => void approve()}
+            >
+              Approve and add to library
             </button>
           </div>
         </Modal>
@@ -1405,6 +1689,7 @@ function ProfilePage({
   refresh: () => Promise<void>;
 }) {
   const [savedForm, setSavedForm] = useState(initial);
+  const [revision, setRevision] = useState(0);
   const [form, setForm] = useState(initial),
     [error, setError] = useState(""),
     [note, setNote] = useState(""),
@@ -1448,6 +1733,7 @@ function ProfilePage({
         description="Keep the facts accurate. Your assistant will help with how you tell them."
       />
       <CVLibrary
+        revision={revision}
         activeId={form.source_cv_id}
         onUse={(cv) => {
           setForm((f) => ({ ...f, facts: cv.text, source_cv_id: cv.id }));
@@ -1456,6 +1742,7 @@ function ProfilePage({
           );
         }}
       />
+      <CareerResearch onAdded={() => setRevision((v) => v + 1)} />
       <div className="two-column">
         <form className="surface form-panel" onSubmit={save}>
           <div className="panel-heading">

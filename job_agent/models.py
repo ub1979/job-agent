@@ -72,9 +72,16 @@ class Profile(BaseModel):
         return value
 
 
+class ResearchInput(BaseModel):
+    query: str = Field(min_length=3, max_length=250)
+    consent: bool = False
+
+
 class CVInput(BaseModel):
     title: str = Field(min_length=1, max_length=200)
-    text: str = Field(min_length=1, max_length=50000)
+    text: str = Field(min_length=1, max_length=300000)
+    kind: Literal['cv', 'academic_cv', 'industry_cv', 'publication', 'book', 'certificate', 'portfolio', 'other', 'online'] = 'cv'
+    approved: bool = False
 
 
 class Settings(BaseModel):

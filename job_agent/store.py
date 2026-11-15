@@ -51,6 +51,10 @@ class Store:
                     stage TEXT NOT NULL, error TEXT NOT NULL DEFAULT '', created TEXT NOT NULL, updated TEXT NOT NULL);
                 CREATE UNIQUE INDEX IF NOT EXISTS one_active_run ON runs(job_id) WHERE status='running';
             ''')
+            columns = {r['name'] for r in db.execute('PRAGMA table_info(cvs)')}
+            for name, declaration in [('kind', "TEXT NOT NULL DEFAULT 'cv'"), ('approved', 'INTEGER NOT NULL DEFAULT 0'), ('source_url', "TEXT NOT NULL DEFAULT ''")]:
+                if name not in columns:
+                    db.execute(f'ALTER TABLE cvs ADD COLUMN {name} {declaration}')
             # A previous process cannot still finish work for this server.
             db.execute("UPDATE runs SET status='interrupted',stage='Interrupted',error='The app restarted. Your message is saved; send it again to continue.' WHERE status='running'")
         os.chmod(self.path, 0o600)
@@ -73,7 +77,7 @@ class Store:
 
     def cvs(self):
         with self.db() as db:
-            return [dict(row) for row in db.execute('SELECT id,filename,title,created,updated FROM cvs ORDER BY updated DESC')]
+            return [dict(row) for row in db.execute('SELECT id,filename,title,created,updated,kind,approved,source_url FROM cvs ORDER BY updated DESC')]
 
     def cv(self, cv_id, original=False):
         with self.db() as db:
@@ -90,15 +94,17 @@ class Store:
         digest = hashlib.sha256(original).hexdigest()
         with self.db() as db:
             cv_id, stamp = identity(), now()
-            db.execute('INSERT OR IGNORE INTO cvs VALUES (?,?,?,?,?,?,?,?)',
+            db.execute('INSERT OR IGNORE INTO cvs (id,filename,title,text,original,digest,created,updated) VALUES (?,?,?,?,?,?,?,?)',
                        (cv_id, filename, filename, text, original, digest, stamp, stamp))
             row = db.execute('SELECT id FROM cvs WHERE digest=?', (digest,)).fetchone()
         return self.cv(row['id'])
 
-    def update_cv(self, cv_id, title, text):
+    def update_cv(self, cv_id, title, text, kind="cv", approved=False, source_url=None):
         self.cv(cv_id)
         with self.db() as db:
-            db.execute('UPDATE cvs SET title=?,text=?,updated=? WHERE id=?', (title.strip(), text, now(), cv_id))
+            db.execute('UPDATE cvs SET title=?,text=?,kind=?,approved=?,updated=? WHERE id=?', (title.strip(), text, kind, int(approved), now(), cv_id))
+            if source_url is not None:
+                db.execute('UPDATE cvs SET source_url=? WHERE id=?', (source_url, cv_id))
         return self.cv(cv_id)
 
     def put(self, key, value):

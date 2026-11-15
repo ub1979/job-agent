@@ -17,7 +17,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 
 
-def extract_upload(filename, content):
+def extract_upload(filename, content, long_document=False):
     suffix = Path(filename).suffix.lower()
     if len(content) > 10 * 1024 * 1024:
         raise ValueError('Please use a document smaller than 10 MB.')
@@ -25,8 +25,8 @@ def extract_upload(filename, content):
         text = content.decode('utf-8-sig')
     elif suffix == '.pdf':
         reader = PdfReader(io.BytesIO(content))
-        if len(reader.pages) > 60:
-            raise ValueError('Please upload a CV or career document under 60 pages.')
+        if len(reader.pages) > (300 if long_document else 60):
+            raise ValueError('Use a document with at most 300 pages.' if long_document else 'Please upload a CV or career document under 60 pages.')
         text = '\n\n'.join(page.extract_text() or '' for page in reader.pages)
     elif suffix == '.docx':
         with zipfile.ZipFile(io.BytesIO(content)) as archive:
@@ -39,7 +39,7 @@ def extract_upload(filename, content):
         raise ValueError('Use a PDF, Word (.docx), text or Markdown file.')
     if not text.strip():
         raise ValueError('No readable text was found. For scanned PDFs, paste the text instead.')
-    if len(text) > 50000:
+    if len(text) > (300000 if long_document else 50000):
         raise ValueError('This document has too much text. Import a shorter CV or paste the relevant sections.')
     return text.strip()
 

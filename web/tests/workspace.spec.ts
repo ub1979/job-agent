@@ -166,14 +166,15 @@ test("multiple CVs, review, profile selection and LinkedIn persist", async ({
   await page
     .locator(".cv-row")
     .filter({ hasText: "leadership.txt" })
-    .getByRole("button", { name: "Review CV" })
+    .getByRole("button", { name: "Review document" })
     .click();
   await page
-    .getByRole("textbox", { name: "CV name", exact: true })
+    .getByRole("textbox", { name: "Document name", exact: true })
     .fill("AI leadership CV");
   await page
-    .getByRole("textbox", { name: /^CV text/ })
+    .getByRole("textbox", { name: /^Document text/ })
     .fill("Led a team delivering AI strategy. Reviewed.");
+  await page.getByLabel(/I have reviewed this text/).check();
   await page
     .getByRole("button", { name: "Use as profile", exact: true })
     .click();
@@ -198,11 +199,11 @@ test("multiple CVs, review, profile selection and LinkedIn persist", async ({
   await page
     .locator(".cv-row")
     .filter({ hasText: "technical.txt" })
-    .getByRole("button", { name: "Review CV" })
+    .getByRole("button", { name: "Review document" })
     .click();
-  await expect(page.getByRole("textbox", { name: /^CV text/ })).toHaveValue(
-    "Built machine learning systems.",
-  );
+  await expect(
+    page.getByRole("textbox", { name: /^Document text/ }),
+  ).toHaveValue("Built machine learning systems.");
   await page.getByRole("button", { name: "Close dialog" }).click();
   await expect(page.getByLabel("Verified career facts")).toHaveValue(
     "Led a team delivering AI strategy. Reviewed.",
@@ -265,4 +266,61 @@ test("responsive layout audit across main screens", async ({
         });
     }
   }
+});
+
+test("online research consent and approval keep findings outside library until reviewed", async ({
+  page,
+}) => {
+  let searched = false;
+  await page.route("**/api/profile/research", async (route) => {
+    expect(route.request().postDataJSON().consent).toBe(true);
+    searched = true;
+    await route.fulfill({
+      json: {
+        candidates: [
+          {
+            id: "candidate123",
+            title: "Research profile",
+            text: "Possible publication by Alex.",
+            url: "https://example.com/alex",
+          },
+        ],
+      },
+    });
+  });
+  await page.route(
+    "**/api/profile/research/candidate123/approve",
+    async (route) => {
+      const body = route.request().postDataJSON();
+      expect(body.approved).toBe(true);
+      expect(body.text).toBe("Confirmed coauthored paper.");
+      await route.fulfill({ json: { id: "approved-source" } });
+    },
+  );
+  await page.goto("/#/profile");
+  await page
+    .getByText("Would you like to check your public online information?")
+    .click();
+  await page
+    .getByRole("textbox", { name: "Public profile search", exact: true })
+    .fill("Alex Example University");
+  await expect(
+    page.getByRole("button", { name: "Search public information" }),
+  ).toBeDisabled();
+  expect(searched).toBe(false);
+  await page
+    .getByLabel("I approve searching online using this exact query.")
+    .check();
+  await page.getByRole("button", { name: "Search public information" }).click();
+  await page.getByRole("button", { name: "Review finding" }).click();
+  await page
+    .getByRole("textbox", { name: "Facts I approve", exact: true })
+    .fill("Confirmed coauthored paper.");
+  await page
+    .getByRole("button", { name: "Approve and add to library" })
+    .click();
+  await expect(page.getByRole("dialog")).not.toBeVisible();
+  await expect(
+    page.getByText("0 findings awaiting review.", { exact: false }),
+  ).toBeVisible();
 });

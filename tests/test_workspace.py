@@ -263,3 +263,79 @@ def test_bad_upload_and_linkedin_link_preserve_profile(client):
     for url in ['https://linkedin.com.evil.test/in/name', 'javascript:alert(1)', 'https://linkedin.com/jobs/view/123']:
         assert client.put('/api/profile', headers=HEADERS, json={'linkedin_url': url}).status_code == 422
     assert client.get('/api/bootstrap').json()['profile']['facts'] == 'Existing facts.'
+
+
+def test_approved_career_evidence_is_job_relevant_and_revocable(client):
+    from job_agent.knowledge import evidence
+    for name, kind, text, approved in [
+        ('academic.txt', 'academic_cv', 'University teaching. Research grants. Published peer-reviewed work.', True),
+        ('industry.txt', 'industry_cv', 'Delivered AI platforms and led engineering teams.', True),
+        ('paper.txt', 'publication', 'Research paper about learning systems.', True),
+        ('private.txt', 'other', 'Unreviewed claim must stay out.', False),
+    ]:
+        doc = client.post('/api/cvs', headers=HEADERS, files={'file': (name, text.encode(), 'text/plain')}).json()
+        result = client.put('/api/cvs/' + doc['id'], headers=HEADERS, json={'title': name, 'text': text, 'kind': kind, 'approved': approved})
+        assert result.status_code == 200
+    store = client.app.state.store
+    academic = evidence(store, {'title': 'University professor', 'description': 'Teaching and research'})
+    assert len(academic['sources']) == 3
+    assert academic['excerpts'][0]['kind'] in ('academic_cv', 'publication')
+    assert 'Unreviewed' not in json.dumps(academic)
+    industry = evidence(store, {'title': 'Director of AI engineering'})
+    assert industry['excerpts'][0]['kind'] == 'industry_cv'
+    source = academic['sources'][0]
+    doc = store.cv(source['id'])
+    client.put('/api/cvs/' + doc['id'], headers=HEADERS, json={'title': doc['title'], 'text': doc['text'], 'approved': False})
+    assert len(evidence(store)['sources']) == 2
+
+
+def test_online_research_needs_consent_and_findings_need_approval(client, monkeypatch):
+    calls = []
+    def search(query):
+        calls.append(query)
+        return [{'title': 'Alex research profile', 'href': 'https://example.com/research/alex', 'body': 'Alex published a paper.'}]
+    monkeypatch.setattr('job_agent.server.web_search', search)
+    assert client.post('/api/profile/research', headers=HEADERS, json={'query': 'Alex Example University'}).status_code == 400
+    assert not calls
+    response = client.post('/api/profile/research', headers=HEADERS, json={'query': 'Alex Example University', 'consent': True})
+    candidate = response.json()['candidates'][0]
+    assert calls == ['Alex Example University']
+    assert client.get('/api/cvs').json() == []
+    endpoint = '/api/profile/research/' + candidate['id'] + '/approve'
+    data = {'title': candidate['title'], 'text': 'Confirmed: I coauthored this paper.'}
+    assert client.post(endpoint, headers=HEADERS, json=data).status_code == 400
+    saved = client.post(endpoint, headers=HEADERS, json={**data, 'approved': True}).json()
+    assert saved['approved'] and saved['kind'] == 'online'
+    assert saved['source_url'] == candidate['url']
+    assert saved['text'] == data['text']
+    from job_agent.knowledge import evidence
+    assert evidence(client.app.state.store)['sources'][0]['source_url'] == candidate['url']
+
+
+def test_long_document_evidence_reports_context_limit(client):
+    from job_agent.knowledge import evidence
+    store = client.app.state.store
+    doc = store.add_cv('book.txt', 'Research evidence.\n' * 8000, b'book')
+    store.update_cv(doc['id'], 'My book', doc['text'], 'book', True)
+    result = evidence(store, {'title': 'Professor'}, budget=5000)
+    assert result['truncated']
+    assert sum(len(e['text']) for e in result['excerpts']) <= 5000
+
+
+def test_job_draft_and_fact_review_both_receive_approved_library(client):
+    store = client.app.state.store
+    cv = store.add_cv('academic.txt', 'Taught university courses and researched accessible design.', b'academic-evidence')
+    store.update_cv(cv['id'], 'Academic CV', cv['text'], 'academic_cv', True)
+    assistant = client.app.state.assistant
+    original = assistant.bridge.generate
+    prompts = []
+    def capture(settings, prompt, cancel=None, system=None):
+        prompts.append(prompt)
+        return original(settings, prompt, cancel, system)
+    assistant.bridge.generate = capture
+    job = create(client, title='University lecturer')
+    client.post('/api/jobs/' + job['id'] + '/messages', headers=HEADERS, json={'text': 'Draft my academic CV'})
+    result = wait_finished(client, job['id'])
+    assert result['run']['status'] == 'complete'
+    assert len(prompts) == 2
+    assert all('career_library' in p and 'Academic CV' in p and 'Taught university' in p for p in prompts)
