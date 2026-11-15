@@ -174,7 +174,14 @@ test("multiple CVs, review, profile selection and LinkedIn persist", async ({
   await page
     .getByRole("textbox", { name: /^Document text/ })
     .fill("Led a team delivering AI strategy. Reviewed.");
-  await page.getByLabel(/I have reviewed this text/).check();
+  await page
+    .getByRole("button", { name: "Approve for AI use", exact: true })
+    .click();
+  await page
+    .locator(".cv-row")
+    .filter({ hasText: "AI leadership CV" })
+    .getByRole("button", { name: "Review document" })
+    .click();
   await page
     .getByRole("button", { name: "Use as profile", exact: true })
     .click();
@@ -325,9 +332,7 @@ test("online research consent and approval keep findings outside library until r
   ).toBeVisible();
 });
 
-test("profile explains pending approval and enables analysis after review", async ({
-  page,
-}) => {
+test("profile explains pending approval and enables analysis after review", async ({ page }, testInfo) => {
   let approved = false;
   await page.route("**/api/profile/readiness", async (route) => {
     await route.fulfill({
@@ -346,20 +351,21 @@ test("profile explains pending approval and enables analysis after review", asyn
   await expect(
     page.getByText("1 uploaded documents are waiting for your review."),
   ).toBeVisible();
-  await page
-    .getByLabel("Upload CV files")
-    .setInputFiles({
-      name: "readiness.txt",
-      mimeType: "text/plain",
-      buffer: Buffer.from("Reviewed university teaching experience."),
-    });
+  await page.getByLabel("Upload CV files").setInputFiles({
+    name: "readiness.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.from("Reviewed university teaching experience."),
+  });
   await page
     .locator(".cv-row")
     .filter({ hasText: "readiness.txt" })
     .getByRole("button", { name: "Review document" })
     .click();
-  await page.getByLabel(/I have reviewed this text/).check();
-  await page.getByRole("button", { name: "Save and approve document" }).click();
+  await expect(page.getByRole('button', {name:'Approve for AI use',exact:true})).toBeInViewport();
+  await page.screenshot({path:'/private/tmp/job-agent-approve-button.png'});
+  await page
+    .getByRole("button", { name: "Approve for AI use", exact: true })
+    .click();
   await expect(
     page.getByRole("button", { name: "Analyse approved information" }),
   ).toBeEnabled();

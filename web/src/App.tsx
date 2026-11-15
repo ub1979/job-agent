@@ -1236,7 +1236,7 @@ function CVLibrary({
       setErrors([errorText(e)]);
     }
   }
-  async function saveReview(use: boolean) {
+  async function saveReview(use: boolean, approval?: boolean) {
     if (!review) return;
     setBusy("Saving CV");
     setErrors([]);
@@ -1248,7 +1248,7 @@ function CVLibrary({
           title: review.title,
           text: review.text,
           kind: review.kind || "cv",
-          approved: Boolean(review.approved),
+          approved: approval ?? Boolean(review.approved),
         },
       );
       await refresh();
@@ -1258,7 +1258,11 @@ function CVLibrary({
       setNotice(
         use
           ? "CV added to your profile draft. Review your career facts and save the profile."
-          : "Document saved. Only approved documents are used by your assistant.",
+          : approval === true
+            ? "Document approved. Your assistant can now use it across jobs."
+            : approval === false
+              ? "AI approval removed. This source will not be included in new requests."
+              : "Document changes saved.",
       );
     } catch (e) {
       setErrors([errorText(e)]);
@@ -1373,6 +1377,27 @@ function CVLibrary({
           title="Review career document"
           onClose={() => !busy && setReview(null)}
         >
+          <div className="document-approval-bar">
+            <div>
+              <b>
+                {review.approved
+                  ? "Approved for AI use"
+                  : "Awaiting your approval"}
+              </b>
+              <p>
+                Review this document. Approving lets your assistant use its
+                information across jobs.
+              </p>
+            </div>
+            <button
+              className="btn primary"
+              disabled={!!busy || !review.text.trim() || !review.title.trim()}
+              onClick={() => void saveReview(false, !review.approved)}
+            >
+              {busy ? <Spinner /> : <CheckCircle2 size={17} />}
+              {review.approved ? "Remove AI approval" : "Approve for AI use"}
+            </button>
+          </div>
           <Field label="Document name">
             <input
               className="input"
@@ -1405,17 +1430,6 @@ function CVLibrary({
               ))}
             </select>
           </Field>
-          <label className="check-label">
-            <input
-              type="checkbox"
-              checked={Boolean(review.approved)}
-              onChange={(e) =>
-                setReview({ ...review, approved: e.target.checked })
-              }
-            />{" "}
-            I have reviewed this text. Allow my assistant to use it across job
-            conversations.
-          </label>
           {review.source_url && (
             <p className="muted small">
               Source:{" "}
@@ -1455,9 +1469,7 @@ function CVLibrary({
               disabled={!!busy || !review.text.trim() || !review.title.trim()}
               onClick={() => void saveReview(false)}
             >
-              {review.approved
-                ? "Save and approve document"
-                : "Save without approval"}
+              Save changes
             </button>
             <button
               className="btn primary"
@@ -1598,10 +1610,10 @@ function CareerResearch({
               : "Add career information to get started."}
           </b>
           <p>
-            Open a document, check the text and document type, tick “I have
-            reviewed this text”, then choose “Save and approve document”.
-            Approve each source you want included. You can also enter career
-            facts below and save your profile.
+            Open “Review document”, check the text and document type, then click
+            “Approve for AI use” at the top of the review window. Approve each
+            source you want included. You can also enter career facts below and
+            save your profile.
           </p>
           <a
             className="btn"
