@@ -103,3 +103,12 @@ Opening a result keeps the search page mounted, including filters, results, expa
 Use **Suggest roles from my profile** to ask the selected AI connection for up to four target titles and an explanation based on saved profile facts and approved library excerpts. Review/edit the titles, then click **Find jobs**. This sends approved career context to the selected AI provider; job sources receive search terms and location filters rather than the CV itself.
 
 Sort by **Best fit to my profile**, **Newest posted** or **Source order**. Best-fit order is a local text relevance calculation using title/description overlap with approved evidence, title weighting and stated role preferences; shared terms are shown. It does not verify qualifications, eligibility, authorship or predict hiring outcomes. Web leads may have only a snippet and no posting date. Discuss a saved job for deeper AI assessment. No evidence means no meaningful fit score; approve sources or save career facts and search again.
+
+## License
+
+Original project-owner material is designated **CC BY-NC-ND 4.0** for
+noncommercial use, with education and research as the intended audience.
+Attribution is required; sharing adapted versions is not licensed.
+See [LICENSE](LICENSE) and [licensing scope and exceptions](LICENSING.md).
+Third-party licenses and earlier grants remain in effect.
+This release is source-available, not OSI open source.
