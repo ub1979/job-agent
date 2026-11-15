@@ -1174,10 +1174,12 @@ type SavedCV = {
 function CVLibrary({
   activeId,
   revision,
+  onChanged,
   onUse,
 }: {
   activeId?: string;
   revision?: number;
+  onChanged: () => void;
   onUse: (cv: SavedCV & { text: string }) => void;
 }) {
   const [cvs, setCVs] = useState<SavedCV[]>([]),
@@ -1218,6 +1220,7 @@ function CVLibrary({
     } catch (e) {
       failures.push(errorText(e));
     }
+    onChanged();
     setErrors(failures);
     setBusy("");
     setNotice(
@@ -1249,6 +1252,7 @@ function CVLibrary({
         },
       );
       await refresh();
+      onChanged();
       if (use) onUse(cv);
       setReview(null);
       setNotice(
@@ -1263,12 +1267,19 @@ function CVLibrary({
     }
   }
   return (
-    <section className="surface cv-library" aria-label="CV library">
+    <section
+      id="career-library"
+      className="surface cv-library"
+      aria-label="CV library"
+    >
       <div className="panel-heading">
         <h2>
           Your career library <span className="muted">({cvs.length})</span>
         </h2>
-        <span className="chip-label">Stored on this device</span>
+        <span className="chip-label">
+          {cvs.filter((cv) => cv.approved).length} of {cvs.length} approved for
+          AI
+        </span>
       </div>
       <p className="muted small">
         Add academic and industry CVs, publications, books, certificates and
@@ -1444,7 +1455,9 @@ function CVLibrary({
               disabled={!!busy || !review.text.trim() || !review.title.trim()}
               onClick={() => void saveReview(false)}
             >
-              Save document
+              {review.approved
+                ? "Save and approve document"
+                : "Save without approval"}
             </button>
             <button
               className="btn primary"
@@ -1467,7 +1480,25 @@ function CVLibrary({
   );
 }
 
-function CareerResearch({ onAdded }: { onAdded: () => void }) {
+function CareerResearch({
+  onAdded,
+  revision,
+}: {
+  onAdded: () => void;
+  revision: number;
+}) {
+  const [readiness, setReadiness] = useState<{
+    total: number;
+    approved: number;
+    ready: boolean;
+  } | null>(null);
+  useEffect(() => {
+    void api<{ total: number; approved: number; ready: boolean }>(
+      "/profile/readiness",
+    )
+      .then(setReadiness)
+      .catch(() => setReadiness(null));
+  }, [revision]);
   const [query, setQuery] = useState(""),
     [consent, setConsent] = useState(false),
     [busy, setBusy] = useState("");
@@ -1546,7 +1577,7 @@ function CareerResearch({ onAdded }: { onAdded: () => void }) {
         <h2>Understand and enrich your profile</h2>
         <button
           className="btn"
-          disabled={!!busy}
+          disabled={!!busy || !readiness?.ready}
           onClick={() => void analyse()}
         >
           {busy === "analysis" ? <Spinner /> : <Sparkles size={16} />} Analyse
@@ -1559,6 +1590,39 @@ function CareerResearch({ onAdded }: { onAdded: () => void }) {
         facts. Analysis sends approved source excerpts and your saved profile to
         your selected AI provider.
       </p>
+      {readiness && !readiness.ready && (
+        <div className="notice" role="status">
+          <b>
+            {readiness.total
+              ? `${readiness.total} uploaded documents are waiting for your review.`
+              : "Add career information to get started."}
+          </b>
+          <p>
+            Open a document, check the text and document type, tick “I have
+            reviewed this text”, then choose “Save and approve document”.
+            Approve each source you want included. You can also enter career
+            facts below and save your profile.
+          </p>
+          <a
+            className="btn"
+            href="#career-library"
+            onClick={(e) => {
+              e.preventDefault();
+              document
+                .getElementById("career-library")
+                ?.scrollIntoView({ behavior: "smooth" });
+            }}
+          >
+            Go to career library
+          </a>
+        </div>
+      )}
+      {readiness?.ready && (
+        <p className="muted small" role="status">
+          Ready to analyse · {readiness.approved} approved documents
+          {readiness.approved === 0 ? " · saved profile text available" : ""}
+        </p>
+      )}
       {analysis && (
         <div className="notice">
           <Markdown>{analysis}</Markdown>
@@ -1717,6 +1781,7 @@ function ProfilePage({
       const saved = await api<Profile>("/profile", "PUT", form);
       setForm(saved);
       setSavedForm(saved);
+      setRevision((v) => v + 1);
       await refresh();
       setNote("Your profile is saved. New replies will use these facts.");
     } catch (e) {
@@ -1734,6 +1799,7 @@ function ProfilePage({
       />
       <CVLibrary
         revision={revision}
+        onChanged={() => setRevision((v) => v + 1)}
         activeId={form.source_cv_id}
         onUse={(cv) => {
           setForm((f) => ({ ...f, facts: cv.text, source_cv_id: cv.id }));
@@ -1742,7 +1808,10 @@ function ProfilePage({
           );
         }}
       />
-      <CareerResearch onAdded={() => setRevision((v) => v + 1)} />
+      <CareerResearch
+        revision={revision}
+        onAdded={() => setRevision((v) => v + 1)}
+      />
       <div className="two-column">
         <form className="surface form-panel" onSubmit={save}>
           <div className="panel-heading">

@@ -339,3 +339,18 @@ def test_job_draft_and_fact_review_both_receive_approved_library(client):
     assert result['run']['status'] == 'complete'
     assert len(prompts) == 2
     assert all('career_library' in p and 'Academic CV' in p and 'Taught university' in p for p in prompts)
+
+
+def test_profile_readiness_updates_on_document_approval(client):
+    assert not client.get('/api/profile/readiness').json()['ready']
+    cv = client.post('/api/cvs', headers=HEADERS, files={'file': ('career.txt', b'University teaching experience.', 'text/plain')}).json()
+    assert client.get('/api/profile/readiness').json() == {'total': 1, 'approved': 0, 'ready': False, 'saved_text': False}
+    client.put('/api/cvs/' + cv['id'], headers=HEADERS, json={'title': 'Academic CV', 'text': cv['text'], 'approved': True})
+    assert client.get('/api/profile/readiness').json()['ready']
+    assert client.get('/api/profile/readiness').json()['approved'] == 1
+
+
+def test_linkedin_text_alone_is_enough_for_profile_analysis(client):
+    client.put('/api/profile', headers=HEADERS, json={'linkedin_text': 'Led AI research at Example University.'})
+    assert client.get('/api/profile/readiness').json()['ready']
+    assert client.post('/api/profile/analyse', headers=HEADERS, json={}).status_code == 200

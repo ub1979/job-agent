@@ -324,3 +324,46 @@ test("online research consent and approval keep findings outside library until r
     page.getByText("0 findings awaiting review.", { exact: false }),
   ).toBeVisible();
 });
+
+test("profile explains pending approval and enables analysis after review", async ({
+  page,
+}) => {
+  let approved = false;
+  await page.route("**/api/profile/readiness", async (route) => {
+    await route.fulfill({
+      json: { total: 1, approved: approved ? 1 : 0, ready: approved },
+    });
+  });
+  await page.route("**/api/cvs/*", async (route) => {
+    if (route.request().method() === "PUT")
+      approved = Boolean(route.request().postDataJSON().approved);
+    await route.continue();
+  });
+  await page.goto("/#/profile");
+  await expect(
+    page.getByRole("button", { name: "Analyse approved information" }),
+  ).toBeDisabled();
+  await expect(
+    page.getByText("1 uploaded documents are waiting for your review."),
+  ).toBeVisible();
+  await page
+    .getByLabel("Upload CV files")
+    .setInputFiles({
+      name: "readiness.txt",
+      mimeType: "text/plain",
+      buffer: Buffer.from("Reviewed university teaching experience."),
+    });
+  await page
+    .locator(".cv-row")
+    .filter({ hasText: "readiness.txt" })
+    .getByRole("button", { name: "Review document" })
+    .click();
+  await page.getByLabel(/I have reviewed this text/).check();
+  await page.getByRole("button", { name: "Save and approve document" }).click();
+  await expect(
+    page.getByRole("button", { name: "Analyse approved information" }),
+  ).toBeEnabled();
+  await expect(
+    page.getByText("Ready to analyse · 1 approved documents"),
+  ).toBeVisible();
+});
