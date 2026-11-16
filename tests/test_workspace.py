@@ -446,3 +446,37 @@ def test_managed_browser_routes_prepare_without_pairing_codes(client,monkeypatch
     assert result.status_code==200
     assert result.json()['candidates'][0]['text'].startswith('Confirmed certificate')
     assert not client.get('/api/cvs').json()
+
+
+def test_explicit_user_facts_are_saved_without_documents(client):
+    statement='I was assistant director on five documentaries.'
+    assistant=client.app.state.assistant
+    def answer(settings,prompt,cancel=None,system=None):
+        return json.dumps({'reply':'That is useful production experience. What dates and production companies should I record?','documents':[],'suggested_status':None,'user_facts':[statement,'Invented claim not in the user message']})
+    assistant.bridge.generate=answer
+    client.post('/api/jobs/general/messages',headers=HEADERS,json={'text':statement})
+    result=wait_finished(client,'general')
+    assert result['run']['status']=='complete'
+    profile=client.get('/api/bootstrap').json()['profile']
+    assert statement in profile['self_reported_facts']
+    assert 'Invented' not in profile['self_reported_facts']
+    assert client.get('/api/profile/readiness').json()['ready']
+    assert result['messages'][-1]['metadata']['saved_user_facts']==[statement]
+    client.post('/api/jobs/general/messages',headers=HEADERS,json={'text':statement})
+    wait_finished(client,'general')
+    assert client.get('/api/bootstrap').json()['profile']['self_reported_facts'].count(statement)==1
+
+
+def test_review_keeps_self_reports_and_saves_them_with_draft(client):
+    statement='I built an AI video studio.'
+    original=client.app.state.assistant.bridge.generate
+    def answer(settings,prompt,cancel=None,system=None):
+        if system and 'factual editor' in system:
+            assert statement in prompt
+            return original(settings,prompt,cancel,system)
+        return json.dumps({'reply':'Preparing your draft.','documents':[{'kind':'cv','title':'CV','content':'Built an AI video studio.'}],'suggested_status':None,'user_facts':[statement]})
+    client.app.state.assistant.bridge.generate=answer
+    job=create(client)
+    client.post('/api/jobs/'+job['id']+'/messages',headers=HEADERS,json={'text':statement+' Draft my CV.'})
+    assert wait_finished(client,job['id'])['run']['status']=='complete'
+    assert statement in client.get('/api/bootstrap').json()['profile']['self_reported_facts']

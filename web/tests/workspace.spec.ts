@@ -1,4 +1,17 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
+
+async function openProfileTools(page: Page) {
+  const summaries = page.locator(".profile-tools > summary");
+  await expect(summaries.first()).toBeVisible();
+  for (let i = 0; i < (await summaries.count()); i++) {
+    if (
+      !(await summaries
+        .nth(i)
+        .evaluate((el) => (el.parentElement as HTMLDetailsElement).open))
+    )
+      await summaries.nth(i).click();
+  }
+}
 
 test("profile, job chat, document revision, submission and archive", async ({
   page,
@@ -14,6 +27,7 @@ test("profile, job chat, document revision, submission and archive", async ({
     fullPage: true,
   });
   await page.getByRole("button", { name: "My profile", exact: true }).click();
+  await openProfileTools(page);
   await page.getByLabel("Your name", { exact: true }).fill("Alex Example");
   await page
     .getByLabel("Verified career facts")
@@ -144,6 +158,7 @@ test("multiple CVs, review, profile selection and LinkedIn persist", async ({
   page,
 }) => {
   await page.goto("/#/profile");
+  await openProfileTools(page);
   await page.getByLabel("Upload CV files").setInputFiles([
     {
       name: "leadership.txt",
@@ -197,6 +212,7 @@ test("multiple CVs, review, profile selection and LinkedIn persist", async ({
   await page.getByRole("button", { name: "Save profile", exact: true }).click();
   await expect(page.getByText("Your profile is saved.")).toBeVisible();
   await page.reload();
+  await openProfileTools(page);
   await expect(page.getByLabel("LinkedIn profile link")).toHaveValue(
     "https://www.linkedin.com/in/alex-example",
   );
@@ -305,6 +321,7 @@ test("online research consent and approval keep findings outside library until r
     },
   );
   await page.goto("/#/profile");
+  await openProfileTools(page);
   await page
     .getByText("Would you like to check your public online information?")
     .click();
@@ -347,6 +364,7 @@ test("profile explains pending approval and enables analysis after review", asyn
     await route.continue();
   });
   await page.goto("/#/profile");
+  await openProfileTools(page);
   await expect(
     page.getByRole("button", { name: "Analyse approved information" }),
   ).toBeDisabled();
@@ -379,6 +397,7 @@ test("profile explains pending approval and enables analysis after review", asyn
   const row = page.locator(".cv-row").filter({ hasText: "readiness.txt" });
   await expect(row.locator(".approval-badge")).toHaveText("Approved for AI");
   await page.reload();
+  await openProfileTools(page);
   await expect(row.locator(".approval-badge")).toHaveText("Approved for AI");
   await page.getByLabel("Upload CV files").setInputFiles({
     name: "awaiting.txt",
@@ -559,6 +578,7 @@ test("public link review asks permission and keeps findings pending", async ({
     });
   });
   await page.goto("/#/profile");
+  await openProfileTools(page);
   await page
     .getByRole("textbox", { name: "Public source link", exact: true })
     .fill("https://github.com/example/studio");
@@ -576,4 +596,148 @@ test("public link review asks permission and keeps findings pending", async ({
   await expect(
     page.getByRole("dialog", { name: "Approve online information" }),
   ).toBeVisible();
+});
+
+test("profile browser uses the saved LinkedIn URL without unrelated checkbox", async ({
+  page,
+}) => {
+  let opened = "";
+  await page.route("**/api/bootstrap", async (route) => {
+    const response = await route.fetch();
+    const data = await response.json();
+    data.profile.linkedin_url = "https://www.linkedin.com/in/alex-example";
+    await route.fulfill({ json: data });
+  });
+  await page.route("**/api/profile/browser/open", async (route) => {
+    const data = route.request().postDataJSON();
+    opened = data.url;
+    expect(data.consent).toBe(true);
+    await route.fulfill({ json: { url: opened, title: "Profile browser" } });
+  });
+  await page.goto("/#/profile");
+  await openProfileTools(page);
+  await expect(
+    page.getByRole("textbox", { name: /Profile page URL/ }),
+  ).toHaveValue("https://www.linkedin.com/in/alex-example");
+  await expect(
+    page.getByRole("button", { name: "Open profile browser", exact: true }),
+  ).toBeEnabled();
+  await page
+    .getByRole("button", { name: "Open profile browser", exact: true })
+    .click();
+  expect(opened).toBe("https://www.linkedin.com/in/alex-example");
+  await page.getByRole("textbox", { name: /Profile page URL/ }).fill("");
+  await page
+    .getByRole("button", { name: "Open profile browser", exact: true })
+    .click();
+  await expect(page.getByRole("alert")).toContainText(
+    "Enter your LinkedIn or profile URL",
+  );
+});
+
+test("profile chat saves interests, reviews documents, and keeps internet research explicit", async ({
+  page,
+}, testInfo) => {
+  await page.goto("/#/profile");
+  await expect(
+    page.getByRole("heading", { name: "Let’s build your profile." }),
+  ).toBeVisible();
+  await expect(page.locator(".profile-tools[open]")).toHaveCount(0);
+  await page.getByLabel("Upload profile documents").setInputFiles([
+    {
+      name: "chat-industry.txt",
+      mimeType: "text/plain",
+      buffer: Buffer.from("Alex Example led AI strategy for a media studio."),
+    },
+  ]);
+  await expect(
+    page
+      .locator(".profile-chat-context")
+      .getByText("chat-industry.txt", { exact: true }),
+  ).toBeVisible();
+  await page
+    .getByLabel("Profile message", { exact: true })
+    .fill("I am a good singer.");
+  await page.getByRole("button", { name: "Send profile message" }).click();
+  await expect(
+    page.getByRole("log").getByText("Saved to your profile", { exact: true }),
+  ).toBeVisible();
+  await expect(page.locator(".profile-saved-facts")).toContainText(
+    "I am a good singer.",
+  );
+  await page
+    .getByLabel("Profile message", { exact: true })
+    .fill("Approve my uploaded CV");
+  await page.getByRole("button", { name: "Send profile message" }).click();
+  await page
+    .getByRole("log")
+    .getByRole("button", { name: "Review document", exact: true })
+    .click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText(
+    "Alex Example led AI strategy for a media studio.",
+  );
+  await page.keyboard.press("Escape");
+  await expect(dialog).not.toBeVisible();
+  await page
+    .getByRole("log")
+    .getByRole("button", { name: "Review document", exact: true })
+    .click();
+  await dialog
+    .getByRole("button", { name: "Approve for AI", exact: true })
+    .click();
+  await expect(dialog).not.toBeVisible();
+  await expect(
+    page
+      .locator(".profile-chat-context")
+      .getByText("Approved for AI", { exact: true })
+      .first(),
+  ).toBeVisible();
+  let searched = 0;
+  await page.route("**/api/profile/chat/actions/*", async (route) => {
+    if (route.request().method() === "POST") {
+      searched++;
+      await route.fulfill({ json: { status: "complete" } });
+    } else await route.continue();
+  });
+  await page
+    .getByLabel("Profile message", { exact: true })
+    .fill("Search online for my documentary credits");
+  await page.getByRole("button", { name: "Send profile message" }).click();
+  const search = page.getByRole("button", {
+    name: "Search internet",
+    exact: true,
+  });
+  await expect(search).toBeVisible();
+  expect(searched).toBe(0);
+  await expect(page.getByRole("log")).toContainText(
+    "Alex Example documentaries",
+  );
+  await search.click();
+  expect(searched).toBe(1);
+  await page.reload();
+  await expect(page.locator(".profile-saved-facts")).toContainText(
+    "I am a good singer.",
+  );
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.screenshot({
+    path: testInfo.outputPath("profile-chat-desktop.png"),
+    fullPage: true,
+  });
+  for (const width of [390, 320]) {
+    await page.setViewportSize({ width, height: 844 });
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+    await expect(
+      page.getByRole("button", { name: "Upload CVs & documents" }),
+    ).toBeVisible();
+  }
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.screenshot({
+    path: testInfo.outputPath("profile-chat-mobile.png"),
+    fullPage: true,
+  });
 });

@@ -28,6 +28,7 @@ import {
   Clock3,
   RefreshCw,
 } from "lucide-react";
+import { ProfileChat } from "./ProfileChat";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -200,7 +201,9 @@ export function App() {
   useEffect(() => {
     void refresh();
     const routeChange = () => {
-      setRoute(currentRoute());
+      const nextRoute = currentRoute();
+      setRoute(nextRoute);
+      if (nextRoute === "/profile") void refresh();
       window.scrollTo(0, 0);
     };
     window.addEventListener("hashchange", routeChange);
@@ -1744,9 +1747,11 @@ function CVLibrary({
 function CareerResearch({
   onAdded,
   revision,
+  profile,
 }: {
   onAdded: () => void;
   revision: number;
+  profile: Profile;
 }) {
   const [readiness, setReadiness] = useState<{
     total: number;
@@ -1796,18 +1801,46 @@ function CareerResearch({
     url: string;
     title: string;
   } | null>(null);
+  const defaultBrowserLink =
+    profile.linkedin_url || profile.github_url || profile.youtube_url || "";
+  const [browserLink, setBrowserLink] = useState(defaultBrowserLink),
+    [browserError, setBrowserError] = useState("");
+  useEffect(() => {
+    setBrowserLink((current) => current || defaultBrowserLink);
+  }, [defaultBrowserLink]);
   async function captureBrowser() {
+    setBrowserError("");
+    if (!browserLink.trim()) {
+      setBrowserError(
+        "Enter your LinkedIn or profile URL above, or choose a saved link.",
+      );
+      document.getElementById("profile-browser-url")?.focus();
+      return;
+    }
+    try {
+      const target = new URL(browserLink.trim());
+      if (
+        !["http:", "https:"].includes(target.protocol) ||
+        target.username ||
+        target.password
+      )
+        throw new Error();
+    } catch {
+      setBrowserError(
+        "Use a complete http(s) profile URL without login credentials.",
+      );
+      return;
+    }
     setBusy("capture");
-    setError("");
     try {
       setCaptureCode(
         await api("/profile/browser/open", "POST", {
-          url: link,
-          consent: linkConsent,
+          url: browserLink.trim(),
+          consent: true,
         }),
       );
     } catch (e) {
-      setError(errorText(e));
+      setBrowserError(errorText(e));
     } finally {
       setBusy("");
     }
@@ -2007,13 +2040,60 @@ function CareerResearch({
           review, then approve the evidence you confirm. No extension or pairing
           code is needed.
         </p>
+        <Field
+          label="Profile page URL"
+          hint="Your saved LinkedIn link is used automatically. You can enter a different profile address."
+        >
+          <input
+            id="profile-browser-url"
+            type="url"
+            className="input"
+            value={browserLink}
+            onChange={(e) => {
+              setBrowserLink(e.target.value);
+              setBrowserError("");
+            }}
+            placeholder="https://www.linkedin.com/in/your-name"
+          />
+        </Field>
+        <div className="button-row">
+          {(
+            [
+              ["LinkedIn", profile.linkedin_url],
+              ["GitHub", profile.github_url],
+              ["YouTube", profile.youtube_url],
+            ] as const
+          )
+            .filter(([, url]) => Boolean(url))
+            .map(([label, url]) => (
+              <button
+                key={label}
+                className="text-button"
+                onClick={() => {
+                  setBrowserLink(url || "");
+                  setBrowserError("");
+                }}
+              >
+                Use saved {label} link
+              </button>
+            ))}
+        </div>
+        {browserError && <Alert>{browserError}</Alert>}
         <button
-          className="btn"
-          disabled={!!busy || !linkConsent || !link.trim()}
+          className="btn primary"
+          disabled={!!busy}
           onClick={() => void captureBrowser()}
         >
-          Open profile browser
+          {busy === "capture" ? <Spinner /> : <Globe2 size={16} />}
+          {busy === "capture"
+            ? "Opening profile browser…"
+            : "Open profile browser"}
         </button>
+        <p className="muted small">
+          Opens the address above in Job Agent’s browser. You sign in yourself;
+          only text you explicitly select and import is brought into your
+          profile for approval.
+        </p>
         {captureCode && (
           <>
             <p style={{ overflowWrap: "anywhere" }}>
@@ -2173,6 +2253,17 @@ function ProfilePage({
     [error, setError] = useState(""),
     [note, setNote] = useState(""),
     [busy, setBusy] = useState("");
+  useEffect(() => {
+    setForm((current) => {
+      const merged = { ...current };
+      for (const key of Object.keys(initial) as (keyof Profile)[]) {
+        if (current[key] === savedForm[key])
+          Object.assign(merged, { [key]: initial[key] });
+      }
+      return merged;
+    });
+    setSavedForm(initial);
+  }, [initial]);
   const dirty = JSON.stringify(form) !== JSON.stringify(savedForm);
   useEffect(() => {
     const warn = (event: BeforeUnloadEvent) => {
@@ -2209,200 +2300,235 @@ function ProfilePage({
     <>
       <PageTitle
         eyebrow="YOUR STORY, IN YOUR WORDS"
-        title="A strong starting point."
-        description="Keep the facts accurate. Your assistant will help with how you tell them."
+        title="Your story starts here."
+        description="Talk naturally, add your documents, and build a profile that grows with you."
       />
-      <CVLibrary
+      <ProfileChat
         revision={revision}
-        onChanged={() => setRevision((v) => v + 1)}
-        activeId={form.source_cv_id}
-        onUse={(cv) => {
-          setForm((f) => ({ ...f, facts: cv.text, source_cv_id: cv.id }));
-          setNote(
-            "Selected CV added to your draft. Save profile to use it in new conversations.",
-          );
+        onChanged={() => {
+          setRevision((v) => v + 1);
+          void refresh();
         }}
       />
-      <CareerResearch
-        revision={revision}
-        onAdded={() => setRevision((v) => v + 1)}
-      />
-      <div className="two-column">
-        <form className="surface form-panel" onSubmit={save}>
-          <div className="panel-heading">
-            <h2>Career profile</h2>
-            <span className="chip-label" role="status">
-              {dirty ? "Unsaved changes" : "Saved profile"}
-            </span>
-          </div>
-          <Field label="Your name">
-            <input
-              className="input"
-              maxLength={200}
-              value={form.name}
-              placeholder="How should we address you?"
-              onChange={(e) => update("name", e.target.value)}
-            />
-          </Field>
-          <Field
-            label="Verified career facts"
-            hint="Experience, dates, education, skills, achievements and contact details you want included. Importing a file lets you review the text before saving."
-          >
-            <textarea
-              className="textarea"
-              rows={10}
-              maxLength={50000}
-              placeholder="Paste your CV, or describe your experience…"
-              value={form.facts}
-              onChange={(e) => update("facts", e.target.value)}
-            />
-          </Field>
-          <div className="field-grid">
-            <Field label="GitHub profile or project">
-              <input
-                type="url"
-                className="input"
-                maxLength={2000}
-                value={form.github_url || ""}
-                onChange={(e) => update("github_url", e.target.value)}
-                placeholder="https://github.com/your-name"
-              />
-            </Field>
-            <Field label="YouTube channel or video">
-              <input
-                type="url"
-                className="input"
-                maxLength={2000}
-                value={form.youtube_url || ""}
-                onChange={(e) => update("youtube_url", e.target.value)}
-                placeholder="https://www.youtube.com/@your-channel"
-              />
-            </Field>
-          </div>
-          <Field
-            label="Other public links and production credits"
-            hint="Add portfolio, publications, books, documentary credits and your role. A saved link is a reference; use Review public link above to fetch readable evidence for approval."
-          >
-            <textarea
-              className="textarea"
-              rows={4}
-              maxLength={5000}
-              value={form.other_links || ""}
-              onChange={(e) => update("other_links", e.target.value)}
-            />
-          </Field>
-          <Field
-            label="LinkedIn profile link"
-            hint="Add your profile URL. The app does not sign in to LinkedIn or read the link automatically."
-          >
-            <input
-              type="url"
-              className="input"
-              maxLength={1000}
-              value={form.linkedin_url || ""}
-              placeholder="https://www.linkedin.com/in/your-name"
-              onChange={(e) => update("linkedin_url", e.target.value)}
-            />
-          </Field>
-          <Field
-            label="LinkedIn profile text"
-            hint="Paste your About and Experience sections, or upload a LinkedIn PDF to your CV library. Only supplied text is used by the assistant."
-          >
-            <textarea
-              className="textarea"
-              rows={5}
-              maxLength={20000}
-              value={form.linkedin_text || ""}
-              onChange={(e) => update("linkedin_text", e.target.value)}
-              placeholder="Paste the profile details you want your assistant to use…"
-            />
-          </Field>
-          <Field
-            label="What you’re looking for"
-            hint="Roles, salary expectations, languages, relocation preferences and work-permission constraints. Only share what you want the AI to use."
-          >
-            <textarea
-              className="textarea"
-              rows={4}
-              maxLength={10000}
-              value={form.preferences}
-              onChange={(e) => update("preferences", e.target.value)}
-              placeholder="What matters in your next role?"
-            />
-          </Field>
-          <div className="field-grid">
-            <Field label="Preferred cities or countries">
-              <input
-                className="input"
-                value={form.locations}
-                maxLength={1000}
-                onChange={(e) => update("locations", e.target.value)}
-                placeholder="London, Germany, Canada"
-              />
-            </Field>
-            <Field label="Work arrangement">
-              <select
-                className="input"
-                value={form.work_mode}
-                onChange={(e) => update("work_mode", e.target.value)}
-              >
-                <option value="any">Any arrangement</option>
-                <option value="remote">Remote</option>
-                <option value="hybrid">Hybrid</option>
-                <option value="onsite">On-site</option>
-              </select>
-            </Field>
-          </div>
-          <Field label="Your writing style">
-            <textarea
-              className="textarea"
-              rows={3}
-              maxLength={4000}
-              value={form.writing_style}
-              onChange={(e) => update("writing_style", e.target.value)}
-              placeholder="e.g. Warm and direct. British English. Avoid buzzwords."
-            />
-          </Field>
-          {error && <Alert>{error}</Alert>}
-          {note && (
-            <div className="notice success">
-              <CheckCircle2 size={17} />
-              {note}
+      <details className="profile-tools">
+        <summary>
+          Document library · organise, edit and manage approvals
+        </summary>
+        <CVLibrary
+          revision={revision}
+          onChanged={() => setRevision((v) => v + 1)}
+          activeId={form.source_cv_id}
+          onUse={(cv) => {
+            setForm((f) => ({ ...f, facts: cv.text, source_cv_id: cv.id }));
+            setNote(
+              "Selected CV added to your draft. Save profile to use it in new conversations.",
+            );
+          }}
+        />
+      </details>
+      <details className="profile-tools">
+        <summary>
+          Public links and research · LinkedIn browser, GitHub and more
+        </summary>
+        <CareerResearch
+          profile={form}
+          revision={revision}
+          onAdded={() => setRevision((v) => v + 1)}
+        />
+      </details>
+      <details className="profile-tools">
+        <summary>
+          Saved details and preferences · edit your full profile
+        </summary>
+        <div className="two-column">
+          <form className="surface form-panel" onSubmit={save}>
+            <div className="panel-heading">
+              <h2>Career profile</h2>
+              <span className="chip-label" role="status">
+                {dirty ? "Unsaved changes" : "Saved profile"}
+              </span>
             </div>
-          )}
-          <button className="btn primary large" disabled={!!busy}>
-            {busy === "save" ? <Spinner /> : <Check size={18} />} Save profile
-          </button>
-        </form>
-        <aside className="side-note">
-          <span className="soft-icon">
-            <UserRound size={24} />
-          </span>
-          <h2>
-            You supply the facts.
-            <br />
-            AI helps tell the story.
-          </h2>
-          <p>
-            This profile is shared across your job conversations. You can update
-            it whenever your experience or goals change.
-          </p>
-          <p>
-            Your records stay on this device. Relevant profile and job details
-            are sent to the AI connection you select when you ask for help.
-          </p>
-          <button
-            className="btn"
-            onClick={() =>
-              void download("/export", "job-agent-backup.zip").catch((e) =>
-                setError(errorText(e)),
-              )
-            }
-          >
-            <Download size={16} /> Export my records
-          </button>
-        </aside>
-      </div>
+            <Field label="Your name">
+              <input
+                className="input"
+                maxLength={200}
+                value={form.name}
+                placeholder="How should we address you?"
+                onChange={(e) => update("name", e.target.value)}
+              />
+            </Field>
+            <Field
+              label="Verified career facts"
+              hint="Experience, dates, education, skills, achievements and contact details you want included. Importing a file lets you review the text before saving."
+            >
+              <textarea
+                className="textarea"
+                rows={10}
+                maxLength={50000}
+                placeholder="Paste your CV, or describe your experience…"
+                value={form.facts}
+                onChange={(e) => update("facts", e.target.value)}
+              />
+            </Field>
+            <Field
+              label="Experience you told your assistant"
+              hint="Your own statements are trusted as self-reported information. New facts from chat appear here. Edit or remove anything incorrect; dates and other missing details are never invented."
+            >
+              <textarea
+                className="textarea"
+                rows={6}
+                maxLength={30000}
+                value={form.self_reported_facts || ""}
+                onChange={(e) => update("self_reported_facts", e.target.value)}
+              />
+            </Field>
+            <div className="field-grid">
+              <Field label="GitHub profile or project">
+                <input
+                  type="url"
+                  className="input"
+                  maxLength={2000}
+                  value={form.github_url || ""}
+                  onChange={(e) => update("github_url", e.target.value)}
+                  placeholder="https://github.com/your-name"
+                />
+              </Field>
+              <Field label="YouTube channel or video">
+                <input
+                  type="url"
+                  className="input"
+                  maxLength={2000}
+                  value={form.youtube_url || ""}
+                  onChange={(e) => update("youtube_url", e.target.value)}
+                  placeholder="https://www.youtube.com/@your-channel"
+                />
+              </Field>
+            </div>
+            <Field
+              label="Other public links and production credits"
+              hint="Add portfolio, publications, books, documentary credits and your role. A saved link is a reference; use Review public link above to fetch readable evidence for approval."
+            >
+              <textarea
+                className="textarea"
+                rows={4}
+                maxLength={5000}
+                value={form.other_links || ""}
+                onChange={(e) => update("other_links", e.target.value)}
+              />
+            </Field>
+            <Field
+              label="LinkedIn profile link"
+              hint="Add your profile URL. The app does not sign in to LinkedIn or read the link automatically."
+            >
+              <input
+                type="url"
+                className="input"
+                maxLength={1000}
+                value={form.linkedin_url || ""}
+                placeholder="https://www.linkedin.com/in/your-name"
+                onChange={(e) => update("linkedin_url", e.target.value)}
+              />
+            </Field>
+            <Field
+              label="LinkedIn profile text"
+              hint="Paste your About and Experience sections, or upload a LinkedIn PDF to your CV library. Only supplied text is used by the assistant."
+            >
+              <textarea
+                className="textarea"
+                rows={5}
+                maxLength={20000}
+                value={form.linkedin_text || ""}
+                onChange={(e) => update("linkedin_text", e.target.value)}
+                placeholder="Paste the profile details you want your assistant to use…"
+              />
+            </Field>
+            <Field
+              label="What you’re looking for"
+              hint="Roles, salary expectations, languages, relocation preferences and work-permission constraints. Only share what you want the AI to use."
+            >
+              <textarea
+                className="textarea"
+                rows={4}
+                maxLength={10000}
+                value={form.preferences}
+                onChange={(e) => update("preferences", e.target.value)}
+                placeholder="What matters in your next role?"
+              />
+            </Field>
+            <div className="field-grid">
+              <Field label="Preferred cities or countries">
+                <input
+                  className="input"
+                  value={form.locations}
+                  maxLength={1000}
+                  onChange={(e) => update("locations", e.target.value)}
+                  placeholder="London, Germany, Canada"
+                />
+              </Field>
+              <Field label="Work arrangement">
+                <select
+                  className="input"
+                  value={form.work_mode}
+                  onChange={(e) => update("work_mode", e.target.value)}
+                >
+                  <option value="any">Any arrangement</option>
+                  <option value="remote">Remote</option>
+                  <option value="hybrid">Hybrid</option>
+                  <option value="onsite">On-site</option>
+                </select>
+              </Field>
+            </div>
+            <Field label="Your writing style">
+              <textarea
+                className="textarea"
+                rows={3}
+                maxLength={4000}
+                value={form.writing_style}
+                onChange={(e) => update("writing_style", e.target.value)}
+                placeholder="e.g. Warm and direct. British English. Avoid buzzwords."
+              />
+            </Field>
+            {error && <Alert>{error}</Alert>}
+            {note && (
+              <div className="notice success">
+                <CheckCircle2 size={17} />
+                {note}
+              </div>
+            )}
+            <button className="btn primary large" disabled={!!busy}>
+              {busy === "save" ? <Spinner /> : <Check size={18} />} Save profile
+            </button>
+          </form>
+          <aside className="side-note">
+            <span className="soft-icon">
+              <UserRound size={24} />
+            </span>
+            <h2>
+              You supply the facts.
+              <br />
+              AI helps tell the story.
+            </h2>
+            <p>
+              This profile is shared across your job conversations. You can
+              update it whenever your experience or goals change.
+            </p>
+            <p>
+              Your records stay on this device. Relevant profile and job details
+              are sent to the AI connection you select when you ask for help.
+            </p>
+            <button
+              className="btn"
+              onClick={() =>
+                void download("/export", "job-agent-backup.zip").catch((e) =>
+                  setError(errorText(e)),
+                )
+              }
+            >
+              <Download size={16} /> Export my records
+            </button>
+          </aside>
+        </div>
+      </details>
     </>
   );
 }
@@ -3284,6 +3410,22 @@ function Chat({
                   </time>
                 </div>
                 <Text>{m.content}</Text>
+                {!!m.metadata.saved_user_facts?.length && (
+                  <div className="notice success" role="status">
+                    <b>Saved to your profile</b>
+                    <ul>
+                      {m.metadata.saved_user_facts.map((fact, i) => (
+                        <li key={i}>{fact}</li>
+                      ))}
+                    </ul>
+                    <button
+                      className="text-button"
+                      onClick={() => go("/profile")}
+                    >
+                      Review or edit these facts
+                    </button>
+                  </div>
+                )}
                 {m.metadata.document_ids?.map((docId) => {
                   const d = data.documents.find((x) => x.id === docId);
                   return d ? (

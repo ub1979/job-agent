@@ -51,6 +51,7 @@ class StatusInput(BaseModel):
 class Profile(BaseModel):
     name: str = Field(default='', max_length=200)
     facts: str = Field(default='', max_length=50000)
+    self_reported_facts: str = Field(default='', max_length=30000)
     preferences: str = Field(default='', max_length=10000)
     locations: str = Field(default='', max_length=1000)
     work_mode: Literal['any', 'remote', 'hybrid', 'onsite'] = 'any'
@@ -130,6 +131,30 @@ class AIResponse(BaseModel):
     reply: str = Field(min_length=1, max_length=40000)
     documents: list[DocumentInput] = Field(default_factory=list, max_length=4)
     suggested_status: Status | None = None
+    user_facts: list[str] = Field(default_factory=list,max_length=5)
+
+    @field_validator('user_facts')
+    @classmethod
+    def bounded_facts(cls,values):
+        if any(not value.strip() or len(value)>2000 for value in values):
+            raise ValueError('Use short, exact user statements for profile facts.')
+        return [value.strip() for value in values]
+
+
+class ProfileAction(BaseModel):
+    kind: Literal['show_document', 'approve_document', 'approve_finding', 'review_link', 'search_web', 'update_profile', 'replace_fact']
+    label: str = Field(min_length=1, max_length=160)
+    target: str = Field(default='', max_length=2000)
+    field: Literal['', 'name', 'preferences', 'locations', 'work_mode', 'writing_style', 'linkedin_url', 'github_url', 'youtube_url', 'other_links'] = ''
+    value: str = Field(default='', max_length=5000)
+
+
+class ProfileAIResponse(BaseModel):
+    reply: str = Field(min_length=1, max_length=40000)
+    user_facts: list[str] = Field(default_factory=list, max_length=5)
+    actions: list[ProfileAction] = Field(default_factory=list, max_length=8)
+
+    _bounded_facts = field_validator('user_facts')(AIResponse.bounded_facts.__func__)
 
 
 class DiscoverInput(BaseModel):

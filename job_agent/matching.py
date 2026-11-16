@@ -15,7 +15,7 @@ def tokens(text):
 
 def rank_jobs(store, jobs):
     profile = store.get('profile', {})
-    source_texts = [profile.get('facts', ''), profile.get('linkedin_text', '')]
+    source_texts = [profile.get('facts', ''), profile.get('linkedin_text', ''), profile.get('self_reported_facts','')]
     for cv in store.cvs():
         if cv['approved']:
             source_texts.append(store.cv(cv['id'])['text'])

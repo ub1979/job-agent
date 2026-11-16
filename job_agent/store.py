@@ -212,7 +212,7 @@ class Store:
         with self.db() as db:
             db.execute('UPDATE runs SET stage=?,status=?,error=?,updated=? WHERE id=? AND status=\'running\'', (stage, status, error, now(), run_id))
 
-    def complete(self, run_id, reply, documents, suggested_status):
+    def complete(self, run_id, reply, documents, suggested_status, user_facts=None, profile_actions=None):
         """Commit all outputs together, only if this run has not been cancelled."""
         with self.db() as db:
             db.execute('BEGIN IMMEDIATE')
@@ -221,11 +221,27 @@ class Store:
                 return
             job_id = run['job_id']
             doc_ids = []
-            for d in documents if job_id != 'general' else []:
+            for d in documents if job_id not in ('general', '__profile__') else []:
                 doc_id = identity()
                 doc_ids.append(doc_id)
                 db.execute('INSERT INTO documents VALUES (?,?,?,?,?,?)', (doc_id, job_id, d['kind'], d['title'], d['content'], now()))
-            metadata = {'document_ids': doc_ids, 'suggested_status': suggested_status}
+            saved_facts=[]
+            latest_user=db.execute("SELECT content FROM messages WHERE job_id=? AND role='user' ORDER BY rowid DESC LIMIT 1",(job_id,)).fetchone()
+            row=db.execute("SELECT value FROM kv WHERE key='profile'").fetchone()
+            profile=json.loads(row['value']) if row else {}
+            reported=profile.get('self_reported_facts','')
+            for fact in user_facts or []:
+                # Save only verbatim claims from the user's own current message.
+                if not latest_user or fact not in latest_user['content'] or fact.casefold() in reported.casefold():continue
+                candidate=reported+('\n' if reported else '')+'- '+fact
+                if len(candidate)>30000:continue
+                reported=candidate;saved_facts.append(fact)
+            if saved_facts:
+                profile['self_reported_facts']=reported
+                db.execute("INSERT OR REPLACE INTO kv VALUES ('profile',?)",(json.dumps(profile),))
+            for action in profile_actions or []:
+                db.execute('INSERT INTO kv VALUES (?,?)', ('profile-action:' + action['id'], json.dumps(action)))
+            metadata = {'profile_actions': profile_actions or [], 'document_ids': doc_ids, 'suggested_status': suggested_status,'saved_user_facts':saved_facts}
             db.execute('INSERT INTO messages VALUES (?,?,?,?,?,?)', (identity(), job_id, 'assistant', reply, json.dumps(metadata), now()))
             if any(d['kind'] in ('cv', 'cover_letter') for d in documents):
                 db.execute("UPDATE jobs SET status=CASE WHEN status='saved' THEN 'drafted' ELSE status END,updated=? WHERE id=?", (now(), job_id))

@@ -1,3 +1,23 @@
+export interface ProfileSource {
+  id: string;
+  title: string;
+  filename?: string;
+  kind?: string;
+  approved?: number;
+  text?: string;
+  url?: string;
+  source_url?: string;
+}
+export interface ProfileAction {
+  id: string;
+  kind: string;
+  label: string;
+  target: string;
+  field: string;
+  value: string;
+  status: string;
+  record?: ProfileSource;
+}
 export interface Job {
   id: string;
   title: string;
@@ -21,6 +41,7 @@ export interface Profile {
   other_links?: string;
   name: string;
   facts: string;
+  self_reported_facts?: string;
   preferences: string;
   locations: string;
   work_mode: string;
@@ -46,7 +67,12 @@ export interface Message {
   role: string;
   content: string;
   created: string;
-  metadata: { document_ids?: string[]; suggested_status?: string | null };
+  metadata: {
+    saved_user_facts?: string[];
+    profile_actions?: ProfileAction[];
+    document_ids?: string[];
+    suggested_status?: string | null;
+  };
 }
 export interface Run {
   id: string;
