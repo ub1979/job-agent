@@ -495,3 +495,85 @@ test("search survives opening jobs and reload, with profile suggestions and fit 
     "Director of AI Platforms",
   );
 });
+
+test("AI server discovery, remote approval and model selection", async ({
+  page,
+}) => {
+  await page.route("**/api/ai/discover", async (route) => {
+    const data = route.request().postDataJSON();
+    if (data.base_url) expect(data.remote_approved).toBe(true);
+    await route.fulfill({
+      json: {
+        servers: [
+          {
+            name: "Example AI server",
+            base_url: data.base_url || "http://127.0.0.1:11434/v1",
+            models: ["test-chat-model"],
+          },
+        ],
+        errors: [],
+      },
+    });
+  });
+  await page.goto("/#/settings");
+  await page.getByRole("button", { name: /AI server \/ another PC/ }).click();
+  await expect(
+    page.getByText("Example AI server", { exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("textbox", { name: /AI server address/ })
+    .fill("http://192.168.1.50:11434/v1");
+  await page.getByLabel(/I approve connecting to this address/).check();
+  await page.getByRole("button", { name: "List server models" }).click();
+  await expect(
+    page.getByText("Example AI server", { exact: true }),
+  ).toBeVisible();
+  await page
+    .getByLabel("Server model", { exact: true })
+    .fill("test-chat-model");
+  await page.getByRole("button", { name: "Save settings" }).click();
+  await expect(
+    page.getByText("AI settings saved for Job Agent."),
+  ).toBeVisible();
+});
+
+test("public link review asks permission and keeps findings pending", async ({
+  page,
+}) => {
+  await page.route("**/api/profile/review-link", async (route) => {
+    expect(route.request().postDataJSON()).toEqual({
+      url: "https://github.com/example/studio",
+      consent: true,
+    });
+    await route.fulfill({
+      json: {
+        candidates: [
+          {
+            id: "link-candidate",
+            url: "https://github.com/example/studio",
+            title: "GitHub project: example/studio",
+            text: "Public README excerpt, authorship needs confirmation.",
+          },
+        ],
+      },
+    });
+  });
+  await page.goto("/#/profile");
+  await page
+    .getByRole("textbox", { name: "Public source link", exact: true })
+    .fill("https://github.com/example/studio");
+  await expect(
+    page.getByRole("button", { name: "Review public link", exact: true }),
+  ).toBeDisabled();
+  await page.getByLabel(/I approve reading this public link/).check();
+  await page
+    .getByRole("button", { name: "Review public link", exact: true })
+    .click();
+  await expect(
+    page.getByText("GitHub project: example/studio", { exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Review finding" }).click();
+  await expect(
+    page.getByRole("dialog", { name: "Approve online information" }),
+  ).toBeVisible();
+});

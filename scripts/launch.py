@@ -10,10 +10,17 @@ import time
 import urllib.request
 import webbrowser
 
+# Script execution from a folder whose name contains spaces is supported.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from job_agent.platforms import venv_python, spawn_options, stop_tree
+import psutil
+
 ROOT = Path(__file__).resolve().parent.parent
 RUN = ROOT / '.run'
 PID = RUN / 'server.json'
 
+
+IS_WINDOWS = os.name == 'nt'
 
 def probe(port):
     try:
@@ -24,6 +31,12 @@ def probe(port):
 
 
 def process_identity(pid):
+    if IS_WINDOWS:
+        try:
+            process = psutil.Process(pid)
+            return json.dumps([process.create_time(), process.cmdline()])
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            return ''
     result = subprocess.run(['ps', '-p', str(pid), '-o', 'lstart=', '-o', 'command='],
                             capture_output=True, text=True, env={**os.environ, 'LC_ALL': 'C'})
     return result.stdout.strip() if result.returncode == 0 else ''
@@ -31,7 +44,7 @@ def process_identity(pid):
 
 def is_our_process(data):
     current = process_identity(data['pid'])
-    return bool(current and current == data.get('identity') and '-m job_agent' in current)
+    return bool(current and current == data.get('identity') and ('-m job_agent' in current or '"-m", "job_agent"' in current))
 
 
 def main():
@@ -42,7 +55,10 @@ def main():
             return
         data = json.loads(PID.read_text())
         if is_our_process(data):
-            os.kill(data['pid'], signal.SIGTERM)
+            if IS_WINDOWS:
+                stop_tree(psutil.Process(data['pid']))
+            else:
+                os.kill(data['pid'], signal.SIGTERM)
             for _ in range(80):
                 if not is_our_process(data):
                     break
@@ -69,8 +85,8 @@ def main():
             raise SystemExit(f'Port {port} is already in use. Choose another port: ./start.sh 9212')
     RUN.mkdir(mode=0o700, exist_ok=True)
     with (RUN / 'server.log').open('ab') as log:
-        process = subprocess.Popen([str(ROOT / '.venv/bin/python'), '-m', 'job_agent', '--port', str(port)],
-                                   stdin=subprocess.DEVNULL, stdout=log, stderr=log, cwd=ROOT, start_new_session=True)
+        process = subprocess.Popen([str(venv_python(ROOT)), '-m', 'job_agent', '--port', str(port)],
+                                   stdin=subprocess.DEVNULL, stdout=log, stderr=log, cwd=ROOT, **spawn_options())
     PID.write_text(json.dumps({'pid': process.pid, 'port': port, 'identity': process_identity(process.pid)}))
     for _ in range(80):
         if probe(port):

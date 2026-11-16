@@ -830,7 +830,8 @@ function FindJobs({
     [mode, setMode] = useState(profile.work_mode),
     [matchMode, setMatchMode] = useState("title"),
     [sources, setSources] = useState("all"),
-    [days, setDays] = useState(30);
+    [days, setDays] = useState(30),
+    [feedURL, setFeedURL] = useState("");
   const [result, setResult] = useState<{
       jobs: (JobForm & {
         posted?: string;
@@ -868,11 +869,13 @@ function FindJobs({
         match_mode: string;
         sources: string;
         days: number;
+        feed_url?: string;
       };
       result: NonNullable<typeof result>;
     } | null>("/search/state")
       .then((saved) => {
         if (!mounted || !saved) return;
+        setFeedURL(saved.form.feed_url || "");
         setQuery(saved.form.query);
         setLocations(saved.form.locations);
         setMode(saved.form.work_mode);
@@ -948,6 +951,7 @@ function FindJobs({
           match_mode: matchMode,
           sources,
           days,
+          feed_url: feedURL,
         }),
       );
     } catch (e) {
@@ -1079,6 +1083,21 @@ function FindJobs({
             </select>
           </Field>
         </div>
+        <details style={{ width: "100%" }}>
+          <summary>Include a public RSS or Atom job feed</summary>
+          <Field
+            label="Public job feed URL"
+            hint="For boards that publish feeds, e.g. https://weworkremotely.com/remote-jobs.rss. Feed locations and work eligibility need checking on each posting."
+          >
+            <input
+              className="input"
+              type="url"
+              value={feedURL}
+              onChange={(e) => setFeedURL(e.target.value)}
+              placeholder="https://job-board.example/jobs.rss"
+            />
+          </Field>
+        </details>
         <div className="search-footer">
           <p>
             Separate roles with “or” and locations with commas. Leave locations
@@ -1095,6 +1114,60 @@ function FindJobs({
           </button>
         </div>
       </form>
+      {query.trim() && (
+        <details className="surface search-details" style={{ marginTop: 20 }}>
+          <summary>
+            Search directly on LinkedIn or Indeed · sign in using your browser
+          </summary>
+          <p className="muted small">
+            These links open the job boards themselves. Sign in there as usual.
+            Job Agent cannot read your logged-in results automatically; add a
+            selected job using New job and paste its link or description.
+          </p>
+          {(locations
+            .split(",")
+            .map((value) => value.trim())
+            .filter(Boolean)
+            .slice(0, 5).length
+            ? locations
+                .split(",")
+                .map((value) => value.trim())
+                .filter(Boolean)
+                .slice(0, 5)
+            : [""]
+          ).map((place) => (
+            <p key={place} className="button-row">
+              <span className="muted small">{place || "Worldwide"}</span>
+              <a
+                className="btn"
+                href={
+                  "https://www.linkedin.com/jobs/search/?keywords=" +
+                  encodeURIComponent(query.replace(/\s+or\s+/gi, " OR ")) +
+                  "&location=" +
+                  encodeURIComponent(place)
+                }
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                LinkedIn jobs <ExternalLink size={14} />
+              </a>
+              <a
+                className="btn"
+                href={
+                  "https://www.indeed.com/jobs?q=" +
+                  encodeURIComponent(query.replace(/\s+or\s+/gi, " OR ")) +
+                  "&l=" +
+                  encodeURIComponent(place)
+                }
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Indeed jobs <ExternalLink size={14} />
+              </a>
+            </p>
+          ))}
+        </details>
+      )}
       {error && <Alert>{error}</Alert>}
       {result ? (
         <>
@@ -1701,6 +1774,24 @@ function CareerResearch({
     text: string;
     url: string;
   } | null>(null);
+  const [link, setLink] = useState(""),
+    [linkConsent, setLinkConsent] = useState(false);
+  async function reviewLink() {
+    setBusy("link");
+    setError("");
+    try {
+      const r = await api<{ candidates: NonNullable<typeof candidates> }>(
+        "/profile/review-link",
+        "POST",
+        { url: link, consent: linkConsent },
+      );
+      setCandidates(r.candidates);
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy("");
+    }
+  }
   async function analyse() {
     setBusy("analysis");
     setError("");
@@ -1816,6 +1907,43 @@ function CareerResearch({
           <Markdown>{analysis}</Markdown>
         </div>
       )}
+      <div className="surface" style={{ padding: 18, marginBottom: 18 }}>
+        <h3>Review a public GitHub, YouTube or portfolio link</h3>
+        <p className="muted small">
+          GitHub profiles and repositories expose public metadata and README
+          text. YouTube video links expose metadata only; add transcripts or
+          production credits separately. Findings need your approval before AI
+          can use them.
+        </p>
+        <Field label="Public source link">
+          <input
+            type="url"
+            className="input"
+            placeholder="https://github.com/your-name/project"
+            value={link}
+            onChange={(e) => {
+              setLink(e.target.value);
+              setLinkConsent(false);
+            }}
+          />
+        </Field>
+        <label className="check-label">
+          <input
+            type="checkbox"
+            checked={linkConsent}
+            onChange={(e) => setLinkConsent(e.target.checked)}
+          />{" "}
+          I approve reading this public link to prepare findings for my review.
+        </label>
+        <button
+          className="btn"
+          disabled={!!busy || !linkConsent || !link.trim()}
+          onClick={() => void reviewLink()}
+        >
+          {busy === "link" ? <Spinner /> : <Globe2 size={16} />} Review public
+          link
+        </button>
+      </div>
       <details className="search-details">
         <summary>
           Would you like to check your public online information?
@@ -1854,31 +1982,31 @@ function CareerResearch({
           {busy === "research" ? <Spinner /> : <Globe2 size={16} />} Search
           public information
         </button>
-        {candidates && (
-          <p className="muted small">
-            {candidates.length} findings awaiting review. Confirm identity,
-            accuracy and authorship before adding any text.
-          </p>
-        )}
-        {candidates?.map((c) => (
-          <div className="cv-row" key={c.id}>
-            <div>
-              <b>{c.title}</b>
-              <p>{c.text}</p>
-              <a href={c.url} target="_blank" rel="noopener noreferrer">
-                View source
-              </a>
-            </div>
-            <button
-              className="btn"
-              disabled={!!busy}
-              onClick={() => setReview(c)}
-            >
-              Review finding
-            </button>
-          </div>
-        ))}
       </details>
+      {candidates && (
+        <p className="muted small">
+          {candidates.length} findings awaiting review. Confirm identity,
+          accuracy and authorship before adding any text.
+        </p>
+      )}
+      {candidates?.map((c) => (
+        <div className="cv-row" key={c.id}>
+          <div>
+            <b>{c.title}</b>
+            <p>{c.text}</p>
+            <a href={c.url} target="_blank" rel="noopener noreferrer">
+              View source
+            </a>
+          </div>
+          <button
+            className="btn"
+            disabled={!!busy}
+            onClick={() => setReview(c)}
+          >
+            Review finding
+          </button>
+        </div>
+      ))}
       {!review && error && <Alert>{error}</Alert>}
       {review && (
         <Modal
@@ -2030,6 +2158,40 @@ function ProfilePage({
               onChange={(e) => update("facts", e.target.value)}
             />
           </Field>
+          <div className="field-grid">
+            <Field label="GitHub profile or project">
+              <input
+                type="url"
+                className="input"
+                maxLength={2000}
+                value={form.github_url || ""}
+                onChange={(e) => update("github_url", e.target.value)}
+                placeholder="https://github.com/your-name"
+              />
+            </Field>
+            <Field label="YouTube channel or video">
+              <input
+                type="url"
+                className="input"
+                maxLength={2000}
+                value={form.youtube_url || ""}
+                onChange={(e) => update("youtube_url", e.target.value)}
+                placeholder="https://www.youtube.com/@your-channel"
+              />
+            </Field>
+          </div>
+          <Field
+            label="Other public links and production credits"
+            hint="Add portfolio, publications, books, documentary credits and your role. A saved link is a reference; use Review public link above to fetch readable evidence for approval."
+          >
+            <textarea
+              className="textarea"
+              rows={4}
+              maxLength={5000}
+              value={form.other_links || ""}
+              onChange={(e) => update("other_links", e.target.value)}
+            />
+          </Field>
           <Field
             label="LinkedIn profile link"
             hint="Add your profile URL. The app does not sign in to LinkedIn or read the link automatically."
@@ -2158,6 +2320,33 @@ function SettingsPage({
     [error, setError] = useState(""),
     [note, setNote] = useState(""),
     [busy, setBusy] = useState("");
+  const [servers, setServers] = useState<
+    { name: string; base_url: string; models: string[] }[]
+  >([]);
+  const [serverErrors, setServerErrors] = useState<string[]>([]);
+  async function discover(configured = false) {
+    setBusy("discover");
+    setError("");
+    setServerErrors([]);
+    try {
+      const result = await api<{ servers: typeof servers; errors: string[] }>(
+        "/ai/discover",
+        "POST",
+        configured
+          ? {
+              base_url: form.base_url || "http://127.0.0.1:11434/v1",
+              remote_approved: Boolean(form.remote_approved),
+            }
+          : {},
+      );
+      setServers(result.servers);
+      setServerErrors(result.errors);
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy("");
+    }
+  }
   async function load() {
     setBusy("catalog");
     try {
@@ -2170,6 +2359,7 @@ function SettingsPage({
   }
   useEffect(() => {
     void load();
+    void discover();
   }, []);
   async function action(test: boolean) {
     setBusy(test ? "test" : "save");
@@ -2214,6 +2404,11 @@ function SettingsPage({
                 "Use the providers and models already linked in Appling.",
               ],
               [
+                "http",
+                "AI server / another PC",
+                "Detect Ollama, LM Studio or connect to a server address.",
+              ],
+              [
                 "claude",
                 "Claude Code",
                 "Use the Claude Code sign-in on this computer.",
@@ -2226,6 +2421,7 @@ function SettingsPage({
                 }
                 onClick={() => {
                   setForm({
+                    ...form,
                     engine: id as Settings["engine"],
                     provider: "",
                     model: "",
@@ -2241,7 +2437,120 @@ function SettingsPage({
               </button>
             ))}
           </div>
-          {form.engine === "hermes" ? (
+          {form.engine === "http" ? (
+            <>
+              <div className="panel-heading">
+                <h3>Available AI servers</h3>
+                <button
+                  className="text-button"
+                  disabled={!!busy}
+                  onClick={() => void discover()}
+                >
+                  <RefreshCw size={15} /> Detect on this PC
+                </button>
+              </div>
+              <p className="muted small">
+                Detection checks running servers on this PC. For another PC,
+                enter its address below. No profile data is sent when listing
+                models.
+              </p>
+              {!servers.length && (
+                <p className="notice">
+                  No AI servers detected yet. Start Ollama or LM Studio’s local
+                  server, or enter another PC’s server address.
+                </p>
+              )}
+              {servers.map((server) => (
+                <div className="notice" key={server.base_url}>
+                  <b>{server.name}</b>
+                  <p>
+                    {server.base_url} · {server.models.length} models
+                  </p>
+                  <button
+                    className="btn"
+                    disabled={!!busy}
+                    onClick={() =>
+                      setForm({
+                        ...form,
+                        base_url: server.base_url,
+                        model: server.models[0] || "",
+                        remote_approved:
+                          server.base_url === form.base_url
+                            ? form.remote_approved
+                            : false,
+                      })
+                    }
+                  >
+                    Use this server
+                  </button>
+                </div>
+              ))}
+              <Field
+                label="AI server address"
+                hint="Examples: http://127.0.0.1:11434/v1 (Ollama), http://127.0.0.1:1234/v1 (LM Studio), or http://192.168.1.50:11434/v1 (another PC)."
+              >
+                <input
+                  className="input"
+                  type="url"
+                  value={form.base_url || "http://127.0.0.1:11434/v1"}
+                  onChange={(e) => {
+                    setForm({
+                      ...form,
+                      base_url: e.target.value,
+                      remote_approved: false,
+                      model: "",
+                    });
+                    setServers([]);
+                  }}
+                />
+              </Field>
+              <label className="check-label">
+                <input
+                  type="checkbox"
+                  checked={Boolean(form.remote_approved)}
+                  onChange={(e) =>
+                    setForm({ ...form, remote_approved: e.target.checked })
+                  }
+                />{" "}
+                I approve connecting to this address and sending relevant career
+                information there when I request AI help.
+              </label>
+              <button
+                className="btn"
+                disabled={!!busy}
+                onClick={() => void discover(true)}
+              >
+                {busy === "discover" ? <Spinner /> : <Search size={16} />} List
+                server models
+              </button>
+              {serverErrors.map((message) => (
+                <Alert key={message}>{message}</Alert>
+              ))}
+              <Field label="Server model">
+                <input
+                  className="input"
+                  list="server-models"
+                  value={form.model}
+                  onChange={(e) => setForm({ ...form, model: e.target.value })}
+                  placeholder="Choose a detected chat model"
+                />
+                <datalist id="server-models">
+                  {servers
+                    .filter((server) => server.base_url === form.base_url)
+                    .flatMap((server) => server.models)
+                    .map((model) => (
+                      <option key={model} value={model} />
+                    ))}
+                </datalist>
+              </Field>
+              <p className="muted small">
+                The other PC must run a reachable OpenAI-compatible chat server
+                and allow this device. For servers requiring a key, set
+                JOB_AGENT_AI_API_BASE and JOB_AGENT_AI_API_KEY on this computer.
+                Keys are not stored in the app or Git.
+              </p>
+            </>
+          ) : form.engine === "hermes" ? (
             <>
               <div className="panel-heading">
                 <h3>Linked models</h3>
@@ -2336,7 +2645,8 @@ function SettingsPage({
               disabled={
                 !!busy ||
                 Boolean(
-                  form.engine === "hermes" && form.provider && !form.model,
+                  (form.engine === "hermes" && form.provider && !form.model) ||
+                  (form.engine === "http" && !form.model),
                 )
               }
               onClick={() => void action(false)}
@@ -2349,7 +2659,8 @@ function SettingsPage({
               disabled={
                 !!busy ||
                 Boolean(
-                  form.engine === "hermes" && form.provider && !form.model,
+                  (form.engine === "hermes" && form.provider && !form.model) ||
+                  (form.engine === "http" && !form.model),
                 )
               }
               onClick={() => void action(true)}

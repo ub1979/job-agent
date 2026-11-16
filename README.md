@@ -4,7 +4,7 @@ A separate, local job-search app with Appling's familiar conversational interfac
 
 ## Start
 
-Requires macOS or Linux, Python 3.11+, [uv](https://docs.astral.sh/uv/), and Node.js 22.12+ (or 24+). This initial release was tested on macOS. Windows launch scripts are not included.
+Supports Windows, macOS and Linux. Install [uv](https://docs.astral.sh/uv/) and Node.js 22.12+ (or 24+). The Windows launcher asks uv to supply Python 3.13; macOS/Linux use Python 3.11+ on PATH. Windows checks run in GitHub Actions.
 
 ```bash
 ./start.sh
@@ -14,14 +14,25 @@ On macOS you can also double-click **Start Job Agent.command**. The launcher ins
 
 First launch needs internet to install dependencies. Later launches use the installed dependencies and rebuild the interface. If your system Python is unsuitable, set `JOB_AGENT_PYTHON` to a Python 3.11+ executable before launching.
 
+### Windows
+
+Double-click `start.bat` and stop with `stop.bat`. From Command Prompt, use:
+
+```bat
+cd /d "C:\path with spaces\job-agent"
+start.bat
+```
+
+Use `start.bat 9212` for another port. Scripts work relative to their own folder; there are no hardcoded Mac paths. Windows records live in `%LOCALAPPDATA%\Job Agent` (or `%USERPROFILE%\AppData\Local\Job Agent`). File uploads use the Windows file picker; full local paths such as `C:\Users\Name\Documents\CV.docx` are stripped to the filename and never stored as document metadata. No manual upload-folder path is needed. Windows stop terminates this app's verified process tree; an interrupted AI request is marked on the next launch.
+
 ## AI connections
 
 Open **AI settings** and use **Test connection**. That button makes a small real model request and uses the selected provider's quota.
 
-- **Appling connections:** reads the linked providers from an existing Appling installation. By default, Job Agent finds an `Appling` directory beside this repository. For another location, set `JOB_AGENT_APPLING_ROOT=/path/to/Appling` before starting. That folder must have its working `.venv/bin/python`. Choose a provider and model, or leave both blank to follow Appling's current choice. Settings are saved only in Job Agent; Appling's configuration is never changed. New provider sign-ins are managed in Appling.
+- **Appling connections:** reads the linked providers from an existing Appling installation. By default, Job Agent finds an `Appling` directory beside this repository. For another location, set `JOB_AGENT_APPLING_ROOT=/path/to/Appling` before starting. That folder must have its working `.venv/bin/python` (macOS/Linux) or `.venv\Scripts\python.exe` (Windows). Choose a provider and model, or leave both blank to follow Appling's current choice. Settings are saved only in Job Agent; Appling's configuration is never changed. New provider sign-ins are managed in Appling.
 - **Claude Code:** uses the `claude` executable and its existing subscription sign-in. Install/sign in using Claude Code first. Job Agent disables inherited API-key routes for this option so billing does not silently switch to an API key. Recent Claude Code versions supporting `--no-session-persistence`, `--tools`, and `--strict-mcp-config` are required.
 
-The interface and data storage are independent of Appling. The Appling connection option depends on its runtime; the Claude Code option can run without Appling. No AI engine or paid subscription is bundled. Models vary in quality, speed, context limits and structured-output reliability.
+The interface and data storage are independent of Appling. The Appling connection option depends on its runtime; the Claude Code and AI-server options can run without Appling. No AI engine or paid subscription is bundled. Models vary in quality, speed, context limits and structured-output reliability.
 
 ## What is included
 
@@ -112,3 +123,21 @@ Attribution is required; sharing adapted versions is not licensed.
 See [LICENSE](LICENSE) and [licensing scope and exceptions](LICENSING.md).
 Third-party licenses and earlier grants remain in effect.
 This release is source-available, not OSI open source.
+
+### AI servers on this or another computer
+
+In **AI settings → AI server / another PC**, **Detect on this PC** checks model-list endpoints at loopback ports 11434 (Ollama), 1234 (LM Studio) and 8080. The service must already be running; model discovery is not installation or a successful inference test. Enter a different OpenAI-compatible base URL ending in `/v1` to connect to another server. For a non-loopback address, approve the displayed destination before listing models, then select a chat model, test the connection and save. Relevant approved career context is sent there when you use AI features. Discovery sends no career documents. There is no LAN sweep or automatic firewall/server configuration.
+
+The other PC must explicitly serve its AI API at a reachable LAN address and permit this device. Consult [Ollama compatibility](https://docs.ollama.com/api/openai-compatibility) or [LM Studio server documentation](https://lmstudio.ai/docs/developer). Localhost on one PC is not localhost on another. An HTTPS endpoint is appropriate where transport confidentiality is needed. For an authenticated endpoint, set `JOB_AGENT_AI_API_BASE` to that exact base URL and `JOB_AGENT_AI_API_KEY` to its key in your local environment before launching. Keys are used only for that matching endpoint, not forwarded to detected peers, and are not saved in SQLite or Git. Windows Claude Code connections require the native executable rather than a batch-file wrapper.
+
+### Job-board login and RSS feeds
+
+Search currently combines public indexes and Freehire. **Search directly on LinkedIn or Indeed** opens each board in your browser for each requested location. You can sign in there normally; Job Agent does not collect passwords, copy browser sessions or automatically read logged-in results. Bring a chosen posting back through **New job**, using a link or pasted text. This is not an authenticated scraping integration.
+
+If a board offers public RSS/Atom, expand **Include a public RSS or Atom job feed** and enter the feed URL. For example, [We Work Remotely](https://weworkremotely.com/remote-job-rss-feed) publishes `https://weworkremotely.com/remote-jobs.rss`. Feed jobs join the same results and fit sort, keep their original attribution/links, are filtered by title (or broad keywords) and known posting dates, and deduplicate by URL. Location/work-mode requirements and unknown dates still need review. Private-network feeds, credentials in URLs and XML entities are refused. LinkedIn's [XML feeds](https://learn.microsoft.com/en-us/linkedin/talent/job-postings/xml-feeds-faq?view=li-lts-2026-04) concern employer job submission, not a public job-search RSS export; its [automation policy](https://www.linkedin.com/help/linkedin/answer/a1341387/prohibited-software-and-extensions) also applies to signed-in access.
+
+### GitHub, YouTube and portfolio evidence
+
+Save your GitHub, YouTube and other public links in **My profile**. In **Review a public GitHub, YouTube or portfolio link**, enter a public URL and approve reading it. A GitHub profile read returns public biography metadata and up to 30 recently updated public repository summaries; a repository read returns metadata and a bounded README excerpt. It does not review the whole codebase or establish your personal authorship. A YouTube video read uses public oEmbed metadata only: it does not watch the video, fetch a transcript, verify credits, or enumerate a whole channel. For channel links that do not expose readable metadata, supply individual public video links or paste descriptions/transcripts and your contribution. Other public web pages use the bounded importer and its access checks.
+
+All retrieved material remains a pending finding until **Approve and add to library**. Confirm identity, accuracy and your role before approving it. The assistant now asks for relevant public project/portfolio/production-credit evidence and directs you to this workflow instead of saying the whole app cannot open links. Browsing is app-controlled, not an autonomous tool inside drafting chat.

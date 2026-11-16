@@ -16,6 +16,9 @@ export interface Profile {
   source_cv_id?: string;
   linkedin_url?: string;
   linkedin_text?: string;
+  github_url?: string;
+  youtube_url?: string;
+  other_links?: string;
   name: string;
   facts: string;
   preferences: string;
@@ -24,7 +27,9 @@ export interface Profile {
   writing_style: string;
 }
 export interface Settings {
-  engine: "hermes" | "claude";
+  engine: "hermes" | "claude" | "http";
+  base_url?: string;
+  remote_approved?: boolean;
   provider: string;
   model: string;
 }

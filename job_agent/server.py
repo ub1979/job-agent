@@ -24,7 +24,8 @@ from .matching import rank_jobs, RolePlan
 from .knowledge import evidence
 from .discovery import web_search
 from .store import identity
-from .models import ResearchInput, CVInput, DocumentInput, JobInput, MessageInput, Profile, SearchInput, Settings, StatusInput
+from .ai_servers import discover_servers, validate_server_settings
+from .models import PublicLinkInput, DiscoverInput, ResearchInput, CVInput, DocumentInput, JobInput, MessageInput, Profile, SearchInput, Settings, StatusInput
 from .sources import clean_posting, import_url
 from .discovery import discover_jobs
 from .store import Store
@@ -36,6 +37,8 @@ def data_directory():
     override = os.environ.get('JOB_AGENT_DATA_DIR')
     if override:
         return Path(override).expanduser().resolve()
+    if sys.platform == 'win32':
+        return Path(os.environ.get('LOCALAPPDATA', str(Path.home() / 'AppData/Local'))) / 'Job Agent'
     if sys.platform == 'darwin':
         return Path.home() / 'Library/Application Support/Job Agent'
     return Path(os.environ.get('XDG_DATA_HOME', str(Path.home() / '.local/share'))) / 'job-agent'
@@ -101,8 +104,14 @@ def create_app(data_root=None, bridge=None):
     def catalog():
         return bridge.catalog()
 
+    @app.post('/api/ai/discover')
+    def discover(data: DiscoverInput):
+        return discover_servers(data.base_url, data.remote_approved)
+
     @app.put('/api/settings')
     def settings(data: Settings):
+        if data.engine == 'http':
+            validate_server_settings(data.model_dump())
         store.put('settings', data.model_dump())
         return data
 
@@ -156,6 +165,18 @@ def create_app(data_root=None, bridge=None):
         text = bridge.generate(store.get('settings', Settings().model_dump()), json.dumps(context, ensure_ascii=False), system=system)
         return {'analysis': text, 'sources': context['career_library']['sources'], 'truncated': context['career_library']['truncated']}
 
+    @app.post('/api/profile/review-link')
+    def review_public_link(data: PublicLinkInput):
+        if not data.consent:
+            raise ValueError('Approve reading the displayed public link first.')
+        from .public_profiles import public_link
+        try:
+            item = {**public_link(data.url), 'id': identity()}
+        except (OSError, http.client.HTTPException) as exc:
+            raise ValueError('The public link could not be read. Paste the relevant content instead.') from exc
+        store.put('research:' + item['id'], item)
+        return {'candidates': [item]}
+
     @app.post('/api/profile/research')
     def research_profile(data: ResearchInput):
         if not data.consent:
@@ -195,7 +216,9 @@ def create_app(data_root=None, bridge=None):
     @app.post('/api/cvs')
     async def upload_cv(file: UploadFile = File(...)):
         content = await file.read(10 * 1024 * 1024 + 1)
-        filename = re.sub(r'[\x00-\x1f/\\]', '_', file.filename or 'CV.txt')[-180:]
+        from pathlib import PureWindowsPath
+        filename = PureWindowsPath(file.filename or 'CV.txt').name
+        filename = re.sub(r'[\x00-\x1f<>:"/\\|?*]', '_', filename).strip(' .')[-180:] or 'CV.txt'
         try:
             text = await asyncio.to_thread(extract_upload, filename, content, True)
             from .vendor.posting_guard import guard
@@ -328,6 +351,23 @@ def create_app(data_root=None, bridge=None):
     @app.post('/api/search')
     def search(data: SearchInput):
         result = discover_jobs(data.query, data.locations, data.work_mode, data.days, data.match_mode, data.sources)
+        if data.feed_url:
+            from .feeds import feed_jobs
+            from .discovery import canonical_url
+            try:
+                feed = feed_jobs(data.feed_url, data.query, data.match_mode, data.days)
+                seen = {canonical_url(job['url']) for job in result['jobs']}
+                added = 0
+                for job in feed['jobs']:
+                    key = canonical_url(job['url'])
+                    if key not in seen:
+                        result['jobs'].append(job); seen.add(key); added += 1
+                result['filtered_out'] = result.get('filtered_out', 0) + feed['filtered_out']
+                result.setdefault('source_reports', []).append({'name': 'RSS / Atom feed', 'status': 'searched', 'matches': added, 'queries': [data.feed_url]})
+                result['coverage'] += ' RSS location and work mode eligibility need checking on the original posting; known dates are filtered.'
+            except (ValueError, OSError, http.client.HTTPException):
+                result['errors'].append('RSS feed could not be read. Check the public feed URL and try again.')
+                result.setdefault('source_reports', []).append({'name': 'RSS / Atom feed', 'status': 'unavailable', 'matches': 0, 'queries': [data.feed_url]})
         result['jobs'] = rank_jobs(store, result['jobs'])
         store.put('last_search', {'form': data.model_dump(), 'result': result})
         return result

@@ -58,6 +58,20 @@ class Profile(BaseModel):
     source_cv_id: str = Field(default='', max_length=32)
     linkedin_url: str = Field(default='', max_length=1000)
     linkedin_text: str = Field(default='', max_length=20000)
+    github_url: str = Field(default='', max_length=2000)
+    youtube_url: str = Field(default='', max_length=2000)
+    other_links: str = Field(default='', max_length=5000)
+
+    @field_validator('github_url', 'youtube_url')
+    @classmethod
+    def public_profile_url(cls, value):
+        from urllib.parse import urlsplit
+        value = value.strip()
+        if value:
+            p = urlsplit(value)
+            if p.scheme not in ('https', 'http') or not p.hostname or p.username or p.password:
+                raise ValueError('Use a public http(s) profile URL without credentials.')
+        return value
 
     @field_validator('linkedin_url')
     @classmethod
@@ -85,7 +99,9 @@ class CVInput(BaseModel):
 
 
 class Settings(BaseModel):
-    engine: Literal['hermes', 'claude'] = 'hermes'
+    engine: Literal['hermes', 'claude', 'http'] = 'hermes'
+    base_url: str = Field(default='http://127.0.0.1:11434/v1', max_length=1000)
+    remote_approved: bool = False
     provider: str = Field(default='', max_length=150)
     model: str = Field(default='', max_length=200)
 
@@ -107,9 +123,20 @@ class SearchInput(BaseModel):
     days: int = Field(default=30, ge=1, le=90)
     match_mode: Literal['title', 'broad'] = 'title'
     sources: Literal['all', 'freehire', 'web'] = 'all'
+    feed_url: str = Field(default='', max_length=2000)
 
 
 class AIResponse(BaseModel):
     reply: str = Field(min_length=1, max_length=40000)
     documents: list[DocumentInput] = Field(default_factory=list, max_length=4)
     suggested_status: Status | None = None
+
+
+class DiscoverInput(BaseModel):
+    base_url: str = Field(default='', max_length=1000)
+    remote_approved: bool = False
+
+
+class PublicLinkInput(BaseModel):
+    url: str = Field(min_length=8, max_length=2000)
+    consent: bool = False
