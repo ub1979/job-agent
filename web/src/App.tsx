@@ -1792,6 +1792,36 @@ function CareerResearch({
       setBusy("");
     }
   }
+  const [captureCode, setCaptureCode] = useState<{
+    token: string;
+    origin: string;
+  } | null>(null);
+  async function captureBrowser() {
+    setBusy("capture");
+    setError("");
+    try {
+      setCaptureCode(
+        await api("/profile/browser-code", "POST", {
+          url: link,
+          consent: linkConsent,
+        }),
+      );
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy("");
+    }
+  }
+  async function refreshFindings() {
+    try {
+      const r = await api<{ candidates: NonNullable<typeof candidates> }>(
+        "/profile/findings",
+      );
+      setCandidates(r.candidates);
+    } catch (e) {
+      setError(errorText(e));
+    }
+  }
   async function analyse() {
     setBusy("analysis");
     setError("");
@@ -1933,7 +1963,8 @@ function CareerResearch({
             checked={linkConsent}
             onChange={(e) => setLinkConsent(e.target.checked)}
           />{" "}
-          I approve reading this public link to prepare findings for my review.
+          I approve reviewing this link or importing selected text from this
+          site.
         </label>
         <button
           className="btn"
@@ -1942,6 +1973,42 @@ function CareerResearch({
         >
           {busy === "link" ? <Spinner /> : <Globe2 size={16} />} Review public
           link
+        </button>
+      </div>
+      <div className="notice">
+        <b>LinkedIn or another signed-in profile?</b>
+        <p>
+          Open it in your own Chrome/Edge browser and select the text you want
+          to import, including certificates. The browser assistant can copy only
+          your selection after you preview it. It does not log in, crawl the
+          profile or read hidden sections.
+        </p>
+        <button
+          className="btn"
+          disabled={!!busy || !linkConsent || !link.trim()}
+          onClick={() => void captureBrowser()}
+        >
+          Create browser text-import code
+        </button>
+        {captureCode && (
+          <>
+            <p>For: {captureCode.origin} · valid for 10 minutes</p>
+            <Field label="Profile import code">
+              <input className="input" readOnly value={captureCode.token} />
+            </Field>
+            <p>
+              In the installed Job Agent extension, paste this code, select Read
+              my selected text, review it and send it to Job Agent. Install the
+              browser-extension folder via your browser’s Extensions page if
+              needed.
+            </p>
+          </>
+        )}
+        <a className="text-button" href="/api/browser/extension" download>
+          Download browser assistant
+        </a>
+        <button className="btn" onClick={() => void refreshFindings()}>
+          Refresh imported findings
         </button>
       </div>
       <details className="search-details">
@@ -2700,6 +2767,206 @@ function SettingsPage({
   );
 }
 
+function BrowserApplication({
+  job,
+  documents,
+  profile,
+}: {
+  job: Job;
+  documents: Artifact[];
+  profile: Profile;
+}) {
+  const [open, setOpen] = useState(false),
+    [busy, setBusy] = useState(false),
+    [error, setError] = useState("");
+  const [prepared, setPrepared] = useState<{
+    token: string;
+    origin: string;
+    expires_in: number;
+  } | null>(null);
+  const cvs = documents.filter((d) => d.kind === "cv"),
+    covers = documents.filter((d) => d.kind === "cover_letter");
+  const [form, setForm] = useState({
+    cv_id: "",
+    cover_id: "",
+    application_url: job.url,
+    full_name: profile.name,
+    first_name: "",
+    last_name: "",
+    email: "",
+    phone: "",
+    linkedin: profile.linkedin_url || "",
+    github: profile.github_url || "",
+    website: "",
+  });
+  async function prepare() {
+    setBusy(true);
+    setError("");
+    setPrepared(null);
+    try {
+      setPrepared(await api(`/jobs/${job.id}/browser-prepare`, "POST", form));
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <>
+      <button
+        className="btn"
+        onClick={() => {
+          setForm((f) => ({ ...f, cv_id: f.cv_id || cvs[0]?.id || "" }));
+          setOpen(true);
+          setPrepared(null);
+        }}
+      >
+        <ExternalLink size={16} /> Prepare in browser
+      </button>
+      {open && (
+        <Modal
+          title="Prepare browser application"
+          onClose={() => !busy && setOpen(false)}
+        >
+          <p>
+            Use the Chrome/Edge application assistant to fill recognised fields
+            and attach your selected documents. You review the page and press
+            Submit yourself. Some sites save answers or upload files as soon as
+            they are filled.
+          </p>
+          <p className="muted small">
+            Install the unpacked <code>browser-extension</code> folder from this
+            project through Chrome/Edge’s Extensions page with Developer mode
+            enabled. Then open the actual application form in that browser.
+          </p>
+          {!cvs.length && (
+            <p className="notice">
+              Ask your assistant to draft a CV for this job first, then review
+              it in Documents.
+            </p>
+          )}
+          <p>
+            <a className="text-button" href="/api/browser/extension" download>
+              Download Chrome/Edge browser assistant
+            </a>{" "}
+            · Unzip, then choose Load unpacked on your browser’s Extensions
+            page.
+          </p>
+          <Field
+            label="Application form URL"
+            hint="Use the actual form address after any redirect, so the browser code is bound to the correct website."
+          >
+            <input
+              className="input"
+              type="url"
+              value={form.application_url}
+              onChange={(e) => {
+                setPrepared(null);
+                setForm({ ...form, application_url: e.target.value });
+              }}
+            />
+          </Field>
+          <Field label="CV to attach">
+            <select
+              className="input"
+              value={form.cv_id}
+              onChange={(e) => {
+                setPrepared(null);
+                setForm({ ...form, cv_id: e.target.value });
+              }}
+            >
+              <option value="">Choose a reviewed CV</option>
+              {cvs.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.title} · {shortDate(d.created)}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Cover letter to attach">
+            <select
+              className="input"
+              value={form.cover_id}
+              onChange={(e) => {
+                setPrepared(null);
+                setForm({ ...form, cover_id: e.target.value });
+              }}
+            >
+              <option value="">No cover letter</option>
+              {covers.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.title} · {shortDate(d.created)}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <p className="muted small">
+            PDF and Word versions are prepared for the site’s accepted format.
+            Check the attached file on the site. Leave unknown contact fields
+            empty; they will need manual entry.
+          </p>
+          <div className="field-grid">
+            {(
+              [
+                ["full_name", "Full name"],
+                ["first_name", "First name"],
+                ["last_name", "Last name"],
+                ["email", "Application email"],
+                ["phone", "Application phone"],
+                ["linkedin", "LinkedIn URL"],
+                ["github", "GitHub URL"],
+                ["website", "Portfolio website"],
+              ] as const
+            ).map(([key, label]) => (
+              <Field label={label} key={key}>
+                <input
+                  className="input"
+                  value={form[key]}
+                  onChange={(e) => {
+                    setPrepared(null);
+                    setForm({ ...form, [key]: e.target.value });
+                  }}
+                />
+              </Field>
+            ))}
+          </div>
+          {error && <Alert>{error}</Alert>}
+          {prepared && (
+            <div className="notice" role="status">
+              <b>Browser package ready · 10 minutes</b>
+              <p>Approved destination: {prepared.origin}</p>
+              <Field label="Browser code">
+                <input className="input" readOnly value={prepared.token} />
+              </Field>
+              <p>
+                Copy this code into the Job Agent extension on the application
+                page. Select Load selected documents, check the destination,
+                then Fill this page & attach documents. Keep this code private.
+              </p>
+            </div>
+          )}
+          <div className="modal-actions">
+            <button
+              className="btn"
+              disabled={busy}
+              onClick={() => setOpen(false)}
+            >
+              Close
+            </button>
+            <button
+              className="btn primary"
+              disabled={busy || !form.cv_id || !form.application_url}
+              onClick={() => void prepare()}
+            >
+              {busy ? <Spinner /> : <Check size={16} />} Create browser code
+            </button>
+          </div>
+        </Modal>
+      )}
+    </>
+  );
+}
+
 function Chat({
   id,
   refresh,
@@ -3131,6 +3398,11 @@ function Chat({
                 </>
               ) : tab === "documents" ? (
                 <>
+                  <BrowserApplication
+                    job={job}
+                    documents={data.documents}
+                    profile={profile}
+                  />
                   <p className="muted small">
                     Every revision is saved. Submitted versions remain preserved
                     in History.

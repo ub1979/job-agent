@@ -1,0 +1,9 @@
+{
+  "manifest_version": 3,
+  "name": "Job Agent — Application Assistant",
+  "version": "0.1.0",
+  "description": "Prepare job application fields and selected attachments. You review and submit.",
+  "permissions": ["activeTab", "scripting"],
+  "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
+  "action": {"default_popup": "popup.html", "default_title": "Prepare application with Job Agent"}
+}

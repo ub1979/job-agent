@@ -13,11 +13,12 @@ from urllib.parse import quote
 import re
 import zipfile
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import Header, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from .browser_assist import BrowserPrepare, EvidenceCapture, prepare, prepare_capture, site_origin, read_package
 from .ai import Assistant, Bridge
 from .documents import export_docx, export_pdf, extract_upload
 from .matching import rank_jobs, RolePlan
@@ -64,7 +65,7 @@ def create_app(data_root=None, bridge=None):
             if request.headers.get('X-Job-Agent') != '1':
                 return JSONResponse({'detail': 'Open Job Agent to make this change.'}, status_code=403)
             origin = request.headers.get('Origin')
-            if origin and urlsplit(origin).netloc != request.headers.get('host'):
+            if origin and urlsplit(origin).netloc != request.headers.get('host') and not (request.url.path == '/api/browser/evidence' and re.fullmatch(r'chrome-extension://[a-p]{32}', origin)):
                 return JSONResponse({'detail': 'Cross-site changes are not allowed.'}, status_code=403)
             try:
                 if int(request.headers.get('content-length', '0')) > 12 * 1024 * 1024:
@@ -72,6 +73,8 @@ def create_app(data_root=None, bridge=None):
             except ValueError:
                 return JSONResponse({'detail': 'Invalid request size.'}, status_code=400)
         response = await call_next(request)
+        if request.url.path == '/api/browser/evidence' and re.fullmatch(r'chrome-extension://[a-p]{32}', request.headers.get('origin','')):
+            response.headers['Access-Control-Allow-Origin']=request.headers['origin']
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['Referrer-Policy'] = 'no-referrer'
         response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'self'"
@@ -177,6 +180,12 @@ def create_app(data_root=None, bridge=None):
         store.put('research:' + item['id'], item)
         return {'candidates': [item]}
 
+    @app.get('/api/profile/findings')
+    def pending_findings():
+        with store.db() as db:
+            rows=db.execute("SELECT value FROM kv WHERE key LIKE 'research:%' ORDER BY rowid DESC LIMIT 30").fetchall()
+        return {'candidates':[item for row in rows if not (item:=json.loads(row['value'])).get('approved')]}
+
     @app.post('/api/profile/research')
     def research_profile(data: ResearchInput):
         if not data.consent:
@@ -203,7 +212,9 @@ def create_app(data_root=None, bridge=None):
             raise ValueError('Review the text and approve it before adding it.')
         original = ('Source: ' + item['url'] + '\n\n' + data.text).encode()
         doc = store.add_cv('online-source.txt', data.text, original)
-        return store.update_cv(doc['id'], data.title, data.text, 'online', True, item['url'])
+        result=store.update_cv(doc['id'], data.title, data.text, 'online', True, item['url'])
+        store.put('research:' + candidate_id, {**item,'approved':True})
+        return result
 
     @app.get('/api/jobs')
     def jobs():
@@ -270,6 +281,60 @@ def create_app(data_root=None, bridge=None):
         return {'job': store.job(job_id) if job_id != 'general' else None, 'messages': store.messages(job_id),
                 'documents': store.documents(job_id) if job_id != 'general' else [],
                 'events': store.events(job_id) if job_id != 'general' else [], 'run': run}
+
+    @app.post('/api/jobs/{job_id}/browser-prepare')
+    def prepare_browser(job_id: str, data: BrowserPrepare):
+        return prepare(store, job_id, data)
+
+    @app.get('/api/browser/extension')
+    def browser_extension():
+        output=io.BytesIO()
+        with zipfile.ZipFile(output,'w',zipfile.ZIP_DEFLATED) as archive:
+            for name in ('manifest.json','popup.html','popup.js','fill.js','README.md'):
+                archive.write(ROOT/'browser-extension'/name, 'job-agent-browser/'+name)
+            for name in ('LICENSE','LICENSING.md'):
+                archive.write(ROOT/name,'job-agent-browser/'+name)
+        return Response(output.getvalue(),media_type='application/zip',headers={'Content-Disposition':'attachment; filename="job-agent-browser.zip"'})
+
+    @app.post('/api/profile/browser-code')
+    def profile_browser_code(data: PublicLinkInput):
+        if not data.consent:
+            raise ValueError('Approve importing selected profile text first.')
+        return prepare_capture(store,data.url)
+
+    @app.post('/api/browser/evidence')
+    def browser_evidence(data: EvidenceCapture, authorization: str = Header(default='')):
+        if not authorization.startswith('Bearer '):
+            raise HTTPException(401, 'Browser code required.')
+        package=read_package(store,authorization[7:])
+        if package.get('kind')!='evidence_capture' or site_origin(data.source_url)!=package['origin']:
+            raise HTTPException(403, 'This code is not approved for that profile website.')
+        item={'id':identity(),'title':data.title,'text':data.text,'url':data.source_url}
+        store.put('research:'+item['id'],item)
+        return {'candidates':[item]}
+
+    @app.get('/api/browser/package')
+    def browser_package(request: Request, authorization: str = Header(default='')):
+        if not authorization.startswith('Bearer '):
+            raise HTTPException(401, 'Paste the browser code from Job Agent.')
+        package = read_package(store, authorization[7:])
+        headers = {'Cache-Control': 'no-store'}
+        origin = request.headers.get('origin', '')
+        if re.fullmatch(r'chrome-extension://[a-p]{32}', origin):
+            headers['Access-Control-Allow-Origin'] = origin
+        elif origin:
+            raise HTTPException(403, 'Only the browser assistant extension can read this package cross-origin.')
+        return JSONResponse(package, headers=headers)
+
+    @app.options('/api/browser/evidence')
+    @app.options('/api/browser/package')
+    def browser_preflight(request: Request):
+        origin = request.headers.get('origin', '')
+        if not re.fullmatch(r'chrome-extension://[a-p]{32}', origin):
+            raise HTTPException(403, 'Browser extension origin required.')
+        return Response(headers={'Access-Control-Allow-Origin': origin,
+                                  'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-Job-Agent',
+                                  'Access-Control-Allow-Methods': 'GET, POST', 'Access-Control-Max-Age': '600'})
 
     @app.post('/api/jobs/{job_id}/status')
     def status(job_id: str, data: StatusInput):

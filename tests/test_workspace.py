@@ -386,3 +386,40 @@ def test_profile_search_suggestion_requires_evidence(client):
     assert client.post('/api/search/suggest', headers=HEADERS, json={}).status_code == 400
     from job_agent.matching import rank_jobs
     assert rank_jobs(client.app.state.store, [{'title': 'Lecturer'}])[0]['fit']['score'] is None
+
+
+def test_browser_application_package_is_scoped_and_expires(client, monkeypatch):
+    job=create(client)
+    other=create(client,title='Another role')
+    cv=client.post('/api/jobs/'+job['id']+'/documents',headers=HEADERS,json={'kind':'cv','title':'Reviewed CV','content':'# Alex Example\nVerified design experience.'}).json()
+    cover=client.post('/api/jobs/'+job['id']+'/documents',headers=HEADERS,json={'kind':'cover_letter','title':'Reviewed letter','content':'Dear team, verified experience.'}).json()
+    body={'cv_id':cv['id'],'cover_id':cover['id'],'application_url':'https://careers.example.com/apply/123','email':'alex@example.com'}
+    endpoint='/api/jobs/'+job['id']+'/browser-prepare'
+    assert client.post('/api/jobs/'+other['id']+'/browser-prepare',headers=HEADERS,json=body).status_code==400
+    prepared=client.post(endpoint,headers=HEADERS,json=body).json()
+    auth={'Authorization':'Bearer '+prepared['token'],'Origin':'chrome-extension://'+'a'*32}
+    package=client.get('/api/browser/package',headers=auth)
+    assert package.status_code==200
+    data=package.json()
+    assert data['origin']=='https://careers.example.com'
+    assert {d['kind'] for d in data['documents']}=={'cv','cover_letter'}
+    assert all({v['name'].rsplit('.',1)[-1] for v in d['variants']}=={'pdf','docx'} for d in data['documents'])
+    assert client.get('/api/jobs/'+job['id']).json()['job']['status']!='applied'
+    assert client.get('/api/browser/package').status_code==401
+    assert client.get('/api/browser/package',headers={**auth,'Origin':'https://evil.example'}).status_code==403
+    monkeypatch.setattr('job_agent.browser_assist.time.time',lambda:data['expires_at']+1)
+    assert client.get('/api/browser/package',headers=auth).status_code==404
+
+
+def test_browser_selected_profile_text_stays_pending(client):
+    result=client.post('/api/profile/browser-code',headers=HEADERS,json={'url':'https://www.linkedin.com/in/example','consent':True}).json()
+    headers={**HEADERS,'Authorization':'Bearer '+result['token'],'Origin':'chrome-extension://'+'b'*32}
+    data={'title':'My profile selection','source_url':'https://www.linkedin.com/in/example','text':'Certificate in AI. Completed 2025.'}
+    assert client.post('/api/browser/evidence',headers=headers,json={**data,'source_url':'https://evil.example/profile'}).status_code==403
+    response=client.post('/api/browser/evidence',headers=headers,json=data)
+    assert response.status_code==200
+    assert not client.get('/api/cvs').json()
+    pending=client.get('/api/profile/findings').json()['candidates']
+    assert pending[0]['text']==data['text']
+    assert client.post('/api/profile/research/'+pending[0]['id']+'/approve',headers=HEADERS,json={'title':pending[0]['title'],'text':pending[0]['text'],'approved':True}).status_code==200
+    assert not client.get('/api/profile/findings').json()['candidates']

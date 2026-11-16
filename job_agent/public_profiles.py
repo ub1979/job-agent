@@ -49,5 +49,12 @@ def public_link(url):
         return {'title': 'YouTube: ' + str(data.get('title') or 'Video')[:180], 'url': url,
                 'text': 'YouTube public metadata only. The video has NOT been watched; no transcript or production credits were verified.\n' +
                         json.dumps({k: data.get(k) for k in ('title', 'author_name', 'author_url')}, ensure_ascii=False)}
+    if host == 'linkedin.com' or host.endswith('.linkedin.com'):
+        try:
+            result = import_url(url)
+        except ValueError as exc:
+            raise ValueError('LinkedIn did not expose a readable full profile. In My profile, use Create browser text-import code to import text you select while signed in, or upload a profile PDF. A URL alone cannot verify certificates.') from exc
+        result['description'] = 'Public LinkedIn page excerpt only; hidden or signed-in profile sections were not read.\n' + result['description']
+        return {'title': result['title'] or 'LinkedIn public excerpt', 'text': result['description'], 'url': result['url']}
     result = import_url(url)
     return {'title': result['title'] or 'Public profile page', 'text': result['description'], 'url': result['url']}

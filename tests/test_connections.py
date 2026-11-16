@@ -118,3 +118,10 @@ def test_standalone_ai_server_worker_roundtrip(tmp_path):
         assert received[0][1]['messages']==[{'role':'system','content':'Synthetic system'},{'role':'user','content':'Synthetic prompt'}]
     finally:
         server.shutdown();server.server_close();thread.join()
+
+
+def test_linkedin_failure_explains_browser_import(monkeypatch):
+    def blocked(url):raise ValueError('Blocked')
+    monkeypatch.setattr('job_agent.public_profiles.import_url',blocked)
+    with pytest.raises(ValueError,match='browser text-import code'):
+        public_link('https://www.linkedin.com/in/example')

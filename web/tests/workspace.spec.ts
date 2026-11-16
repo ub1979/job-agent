@@ -565,7 +565,7 @@ test("public link review asks permission and keeps findings pending", async ({
   await expect(
     page.getByRole("button", { name: "Review public link", exact: true }),
   ).toBeDisabled();
-  await page.getByLabel(/I approve reading this public link/).check();
+  await page.getByLabel(/I approve reviewing this link/).check();
   await page
     .getByRole("button", { name: "Review public link", exact: true })
     .click();
