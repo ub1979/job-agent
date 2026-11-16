@@ -189,3 +189,176 @@ test("built-in browser prepares an application without extension or codes", asyn
   const updated = await (await request.get(`/api/jobs/${job.id}`)).json();
   expect(updated.job.status).not.toBe("applied");
 });
+
+test("reviews academic answers and combines selected statements in the normal preparation UI", async ({
+  page,
+  request,
+}) => {
+  const headers = { "X-Job-Agent": "1" };
+  const job = await (
+    await request.post("/api/jobs", {
+      headers,
+      data: {
+        title: "University application UI test",
+        url: "https://careers.example.com/faculty",
+        description:
+          "Send a single combined PDF containing application materials.",
+      },
+    })
+  ).json();
+  const saved = [];
+  for (const [kind, title] of [
+    ["cv", "Academic CV"],
+    ["cover_letter", "Cover letter"],
+    ["notes", "Teaching and research statements"],
+  ]) {
+    saved.push(
+      await (
+        await request.post(`/api/jobs/${job.id}/documents`, {
+          headers,
+          data: {
+            kind,
+            title,
+            content: "# Alex Example\nDEMO ONLY - Fictional candidate.",
+          },
+        })
+      ).json(),
+    );
+  }
+  await page.route("**/api/jobs/*/browser/open", async (route) => {
+    const body = route.request().postDataJSON();
+    expect(body.package_mode).toBe("auto");
+    expect(body.supporting_ids).toEqual([saved[2].id]);
+    await route.fulfill({
+      json: {
+        url: job.url,
+        title: "Faculty application",
+        filled: ["Full name"],
+        skipped: ["Education needs review"],
+        uploads: [
+          {
+            label: "Resume",
+            filename: "Alex_application.pdf",
+            status: "attached",
+          },
+        ],
+        package: {
+          name: "Alex_application.pdf",
+          pages: 3,
+          documents: saved.map((d) => ({ id: d.id, title: d.title, pages: 1 })),
+          download_url: "/test-package",
+        },
+      },
+    });
+  });
+  await page.route("**/api/jobs/*/browser/plan", (route) =>
+    route.fulfill({
+      json: {
+        id: "plan1",
+        url: job.url,
+        answers: [
+          {
+            field_id: "degree",
+            label: "Degree",
+            value: "PhD",
+            source_quote: "PhD at Example University",
+            source_title: "Saved profile",
+            reason: "",
+            fallback_value: "",
+            blocked: false,
+            type: "combobox",
+            required: true,
+          },
+          {
+            field_id: "salary",
+            label: "Expected salary",
+            value: "",
+            source_quote: "",
+            source_title: "",
+            reason: "No expectation saved.",
+            fallback_value: "",
+            blocked: false,
+            type: "text",
+            required: true,
+          },
+          {
+            field_id: "terms",
+            label: "Terms and declarations",
+            value: "",
+            source_quote: "",
+            source_title: "",
+            reason: "Complete this yourself.",
+            fallback_value: "",
+            blocked: true,
+            type: "checkbox",
+            required: true,
+          },
+        ],
+      },
+    }),
+  );
+  let filled = false;
+  await page.route("**/api/jobs/*/browser/answers", async (route) => {
+    const body = route.request().postDataJSON();
+    expect(body.answers.find((a: any) => a.field_id === "salary").value).toBe(
+      "110000",
+    );
+    filled = true;
+    await route.fulfill({
+      json: {
+        results: [
+          {
+            label: "Degree",
+            status: "filled",
+            value: "Doctor of Philosophy (Ph.D.)",
+            reason: "Checked on page.",
+          },
+          { label: "Expected salary", status: "filled", value: "110000" },
+        ],
+      },
+    });
+  });
+  await page.route("**/api/jobs/*/browser/preview", (route) =>
+    route.fulfill({
+      json: {
+        image_url:
+          "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==",
+      },
+    }),
+  );
+  await page.goto("/#/job/" + job.id);
+  await page
+    .getByRole("button", { name: "Prepare application", exact: true })
+    .click();
+  const dialog = page.getByRole("dialog");
+  await expect(
+    dialog.getByLabel("Teaching and research statements", { exact: false }),
+  ).toBeChecked();
+  await dialog.getByRole("button", { name: "Open browser & prepare" }).click();
+  await expect(dialog.getByText("Combined PDF ready · 3 pages")).toBeVisible();
+  await dialog
+    .getByRole("button", { name: "Review education & screening answers" })
+    .click();
+  await expect(
+    dialog.getByRole("textbox", { name: "Degree", exact: true }),
+  ).toHaveValue("PhD");
+  await expect(
+    dialog.getByRole("textbox", {
+      name: "Terms and declarations",
+      exact: true,
+    }),
+  ).toBeDisabled();
+  await dialog
+    .getByRole("textbox", { name: "Expected salary", exact: true })
+    .fill("110000");
+  await dialog
+    .getByRole("button", { name: "Fill reviewed answers", exact: true })
+    .click();
+  await expect(
+    dialog.getByRole("heading", { name: "Checked on the page" }),
+  ).toBeVisible();
+  expect(filled).toBe(true);
+  expect(
+    (await (await request.get(`/api/jobs/${job.id}`)).json()).job.status,
+  ).not.toBe("applied");
+});

@@ -40,7 +40,7 @@ class ManagedBrowser:
             self._start()
             try:
                 self.process.stdin.write(json.dumps({'command':command,**data})+'\n');self.process.stdin.flush()
-                line=self.output.get(timeout=65)
+                line=self.output.get(timeout=120)
                 if line is None:raise RuntimeError('Application browser closed. Open it again.')
                 result=json.loads(line)
                 if result.get('error'):raise RuntimeError(result['error'])

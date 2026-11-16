@@ -1,4 +1,5 @@
 import asyncio
+import base64
 from contextlib import asynccontextmanager
 import csv
 import io
@@ -18,6 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from .application_plan import FillPlan
 from .managed_browser import ManagedBrowser
 from .browser_assist import BrowserPrepare, EvidenceCapture, prepare, prepare_capture, site_origin, read_package
 from .ai import Assistant, Bridge
@@ -359,8 +361,9 @@ def create_app(data_root=None, bridge=None):
     def open_application(job_id: str,data: BrowserPrepare):
         prepared=prepare(store,job_id,data)
         bundle=read_package(store,prepared['token'])
-        store.put('application_contact',data.model_dump(exclude={'cv_id','cover_id','application_url'}))
-        return browser.open(job_id,data.application_url,bundle)
+        store.put('application_contact',data.model_dump(exclude={'cv_id','cover_id','application_url','supporting_ids','package_mode'}))
+        result=browser.open(job_id,data.application_url,bundle)
+        return {**result,'package':prepared.get('package')}
 
     @app.get('/api/jobs/{job_id}/browser/status')
     def application_browser_status(job_id: str):
@@ -371,6 +374,37 @@ def create_app(data_root=None, bridge=None):
     def fill_application(job_id: str,data: BrowserPageInput):
         store.job(job_id)
         return browser.fill(job_id,data.url)
+
+    @app.get('/api/jobs/{job_id}/application-package/{package_id}.pdf')
+    def application_package(job_id: str, package_id: str):
+        store.job(job_id)
+        package=store.get('application-package:'+package_id)
+        if not package or package['job_id']!=job_id:
+            raise KeyError('Application package not found for this job.')
+        return Response(base64.b64decode(package['base64']), media_type='application/pdf',
+                        headers={'Content-Disposition': "attachment; filename*=UTF-8''"+quote(package['name'])})
+
+    @app.post('/api/jobs/{job_id}/browser/plan')
+    def application_answer_plan(job_id: str, data: BrowserPageInput):
+        from .application_plan import build_plan
+        store.job(job_id)
+        snapshot=browser.call('inspect',key=job_id,approved_url=data.url)
+        return build_plan(store,bridge,job_id,snapshot)
+
+    @app.post('/api/jobs/{job_id}/browser/answers')
+    def application_answer_fill(job_id: str, data: FillPlan):
+        from .application_plan import reviewed_answers
+        store.job(job_id)
+        plan,answers=reviewed_answers(store,job_id,data)
+        result=browser.call('answers',key=job_id,approved_url=data.url,snapshot_id=plan['snapshot_id'],answers=answers)
+        store.put('application-fill-result:'+job_id,result)
+        return result
+
+    @app.post('/api/jobs/{job_id}/browser/preview')
+    def application_browser_preview(job_id: str, data: BrowserPageInput):
+        store.job(job_id)
+        result=browser.call('capture',key=job_id,approved_url=data.url)
+        return {'image_url':'data:image/png;base64,'+result['base64'],'url':data.url}
 
     @app.post('/api/profile/browser/open')
     def open_profile_browser(data: PublicLinkInput):

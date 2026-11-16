@@ -2943,12 +2943,48 @@ function BrowserApplication({
     filled?: string[];
     skipped?: string[];
     notice?: string;
+    uploads?: {
+      label: string;
+      filename?: string;
+      status: string;
+      reason?: string;
+    }[];
+    package?: {
+      name: string;
+      pages: number;
+      download_url: string;
+      documents: { id: string; title: string; pages: number }[];
+    } | null;
   } | null>(null);
+  type Answer = {
+    field_id: string;
+    label: string;
+    value: string;
+    type: string;
+    required: boolean;
+    source_quote: string;
+    source_title: string;
+    fallback_value: string;
+    reason: string;
+    blocked: boolean;
+  };
+  const [plan, setPlan] = useState<{
+    id: string;
+    url: string;
+    answers: Answer[];
+  } | null>(null);
+  const [answerResults, setAnswerResults] = useState<
+    { label?: string; status: string; value?: string; reason?: string }[]
+  >([]);
+  const [preview, setPreview] = useState("");
+  const [stage, setStage] = useState("");
   const cvs = documents.filter((d) => d.kind === "cv"),
     covers = documents.filter((d) => d.kind === "cover_letter");
   const [form, setForm] = useState({
     cv_id: "",
     cover_id: "",
+    supporting_ids: [] as string[],
+    package_mode: "auto",
     application_url: job.url,
     full_name: profile.name,
     first_name: "",
@@ -2961,7 +2997,25 @@ function BrowserApplication({
   });
   useEffect(() => {
     void api<Record<string, string>>("/browser/contact")
-      .then((saved) => setForm((f) => ({ ...f, ...saved })))
+      .then((saved) =>
+        setForm((f) => ({
+          ...f,
+          ...Object.fromEntries(
+            Object.entries(saved).filter(([key]) =>
+              [
+                "full_name",
+                "first_name",
+                "last_name",
+                "email",
+                "phone",
+                "linkedin",
+                "github",
+                "website",
+              ].includes(key),
+            ),
+          ),
+        })),
+      )
       .catch(() => {});
   }, []);
   async function refreshBrowser() {
@@ -2970,7 +3024,7 @@ function BrowserApplication({
       const result = await api<{ url: string; title: string }>(
         `/jobs/${job.id}/browser/status`,
       );
-      setPrepared(result);
+      setPrepared((old) => ({ ...old, ...result }));
     } catch (e) {
       setError(errorText(e));
     }
@@ -2980,11 +3034,13 @@ function BrowserApplication({
     setBusy(true);
     setError("");
     try {
-      setPrepared(
-        await api(`/jobs/${job.id}/browser/fill`, "POST", {
-          url: prepared.url,
-        }),
-      );
+      const result = await api<{
+        url: string;
+        title: string;
+        filled?: string[];
+        skipped?: string[];
+      }>(`/jobs/${job.id}/browser/fill`, "POST", { url: prepared.url });
+      setPrepared((old) => ({ ...old, ...result }));
     } catch (e) {
       setError(errorText(e));
     } finally {
@@ -2995,12 +3051,70 @@ function BrowserApplication({
     setBusy(true);
     setError("");
     setPrepared(null);
+    setPlan(null);
+    setAnswerResults([]);
+    setPreview("");
+    setStage("Opening the browser and preparing documents…");
     try {
       setPrepared(await api(`/jobs/${job.id}/browser/open`, "POST", form));
     } catch (e) {
       setError(errorText(e));
     } finally {
       setBusy(false);
+    }
+  }
+  async function planAnswers() {
+    if (!prepared) return;
+    setBusy(true);
+    setError("");
+    setStage("Reading the form and checking your profile…");
+    setAnswerResults([]);
+    try {
+      setPlan(
+        await api(`/jobs/${job.id}/browser/plan`, "POST", {
+          url: prepared.url,
+        }),
+      );
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+      setStage("");
+    }
+  }
+  async function fillAnswers() {
+    if (!plan) return;
+    setBusy(true);
+    setError("");
+    setStage("Filling reviewed answers and checking the page…");
+    try {
+      const result = await api<{
+        results: {
+          label?: string;
+          status: string;
+          value?: string;
+          reason?: string;
+        }[];
+      }>(`/jobs/${job.id}/browser/answers`, "POST", {
+        plan_id: plan.id,
+        url: plan.url,
+        answers: plan.answers.map(({ field_id, value }) => ({
+          field_id,
+          value,
+        })),
+      });
+      setAnswerResults(result.results);
+      const picture = await api<{ image_url: string }>(
+        `/jobs/${job.id}/browser/preview`,
+        "POST",
+        { url: plan.url },
+      );
+      setPreview(picture.image_url);
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+      setStage("");
     }
   }
   return (
@@ -3012,9 +3126,28 @@ function BrowserApplication({
             ...f,
             cv_id: f.cv_id || cvs[0]?.id || "",
             cover_id: f.cv_id ? f.cover_id : covers[0]?.id || "",
+            supporting_ids: f.supporting_ids.length
+              ? f.supporting_ids
+              : documents
+                  .filter(
+                    (d) =>
+                      d.kind === "notes" &&
+                      /teaching|research|publication|portfolio|diversity|supporting|statement|\bedi\b/i.test(
+                        d.title,
+                      ),
+                  )
+                  .filter(
+                    (d, i, list) =>
+                      list.findIndex((x) => x.title === d.title) === i,
+                  )
+                  .slice(0, 12)
+                  .map((d) => d.id),
           }));
           setOpen(true);
           setPrepared(null);
+          setPlan(null);
+          setAnswerResults([]);
+          setPreview("");
         }}
       >
         <ExternalLink size={16} /> Prepare application
@@ -3026,9 +3159,10 @@ function BrowserApplication({
         >
           <p>
             Job Agent opens its own Chrome/Edge window and fills recognised
-            fields and attach your selected documents. You review the page and
-            press Submit yourself. Some sites save answers or upload files as
-            soon as they are filled.
+            fields and attaches your selected documents. Review suggested
+            education and screening answers, then fill them in one step. You
+            review the page and press Submit yourself. Some sites save answers
+            or upload files as soon as they are filled.
           </p>
           <p className="muted small">
             No extension or pairing code needed. Sign in yourself if asked; this
@@ -3089,6 +3223,55 @@ function BrowserApplication({
               ))}
             </select>
           </Field>
+          <Field
+            label="Application document package"
+            hint="Auto detects requests for one combined PDF in the saved posting. Review the selected supporting statements before opening the browser."
+          >
+            <select
+              className="input"
+              value={form.package_mode}
+              onChange={(e) => {
+                setForm({ ...form, package_mode: e.target.value });
+                setPrepared(null);
+              }}
+            >
+              <option value="auto">
+                Auto: follow the posting’s PDF instructions
+              </option>
+              <option value="combined">One combined PDF</option>
+              <option value="separate">Separate CV and cover letter</option>
+            </select>
+          </Field>
+          {documents.some((d) => d.kind === "notes") && (
+            <fieldset className="application-supporting">
+              <legend>Supporting statements to include</legend>
+              <p className="muted small">
+                Cover letter, CV, then these statements. Select teaching,
+                research, portfolio or other requested materials; leave internal
+                notes unchecked.
+              </p>
+              {documents
+                .filter((d) => d.kind === "notes")
+                .map((d) => (
+                  <label className="check-label" key={d.id}>
+                    <input
+                      type="checkbox"
+                      checked={form.supporting_ids.includes(d.id)}
+                      onChange={(e) => {
+                        setPrepared(null);
+                        setForm({
+                          ...form,
+                          supporting_ids: e.target.checked
+                            ? [...form.supporting_ids, d.id]
+                            : form.supporting_ids.filter((id) => id !== d.id),
+                        });
+                      }}
+                    />
+                    {d.title} · {shortDate(d.created)}
+                  </label>
+                ))}
+            </fieldset>
+          )}
           <p className="muted small">
             PDF and Word versions are prepared for the site’s accepted format.
             Check the attached file on the site. Leave unknown contact fields
@@ -3119,6 +3302,12 @@ function BrowserApplication({
               </Field>
             ))}
           </div>
+          {busy && stage && (
+            <p className="working" role="status">
+              <Spinner />
+              {stage}
+            </p>
+          )}
           {error && <Alert>{error}</Alert>}
           {prepared && (
             <div className="notice" role="status">
@@ -3127,16 +3316,62 @@ function BrowserApplication({
               <p style={{ overflowWrap: "anywhere" }}>
                 Current page: {prepared.url}
               </p>
+              {prepared.package && (
+                <div className="application-package">
+                  <b>Combined PDF ready · {prepared.package.pages} pages</b>
+                  <ul>
+                    {prepared.package.documents.map((d) => (
+                      <li key={d.id}>
+                        {d.title} · {d.pages} pages
+                      </li>
+                    ))}
+                  </ul>
+                  <button
+                    className="btn small"
+                    onClick={() =>
+                      void download(
+                        prepared.package!.download_url,
+                        prepared.package!.name,
+                      ).catch((e) => setError(errorText(e)))
+                    }
+                  >
+                    <Download size={15} /> Download combined PDF
+                  </button>
+                </div>
+              )}
+              {prepared.uploads?.map((u, i) => (
+                <p key={i}>
+                  {u.label}: {u.filename || "No file"} · {u.status}
+                  {u.reason ? " — " + u.reason : ""}
+                </p>
+              ))}
               {prepared.filled && (
                 <p>{prepared.filled.length} fields or attachments prepared.</p>
               )}
-              {prepared.skipped?.length ? (
-                <ul>
-                  {prepared.skipped.map((item, i) => (
-                    <li key={i}>{item}</li>
-                  ))}
-                </ul>
+              {!answerResults.length && prepared.skipped?.length ? (
+                <div>
+                  <p>
+                    Some fields still need review. Use “Review education &amp;
+                    screening answers” below.
+                  </p>
+                  <ul>
+                    {prepared.skipped
+                      .filter(
+                        (item) => !/^(text|number|select|input):/i.test(item),
+                      )
+                      .map((item, i) => (
+                        <li key={i}>{item}</li>
+                      ))}
+                  </ul>
+                </div>
               ) : null}
+              <button
+                className="btn primary"
+                disabled={busy}
+                onClick={() => void planAnswers()}
+              >
+                <Sparkles size={16} /> Review education &amp; screening answers
+              </button>
               <p>
                 Review the browser window and submit there yourself. For a
                 login, redirect or next step, navigate in the browser, refresh
@@ -3157,6 +3392,104 @@ function BrowserApplication({
                 Fill current application page
               </button>
             </div>
+          )}
+          {plan && (
+            <section
+              className="application-answer-plan"
+              aria-label="Application answer plan"
+            >
+              <h3>Review the remaining answers</h3>
+              <p className="muted small">
+                Answers come from your saved profile and approved sources. Edit
+                them before filling. Unknown answers stay blank; declarations
+                and sensitive questions require manual review.
+              </p>
+              {plan.answers.map((a, i) => (
+                <div className="application-answer" key={a.field_id}>
+                  <Field
+                    label={
+                      a.label.replace(/\s*\*+\s*$/, "") +
+                      (a.required ? " *" : "")
+                    }
+                    hint={a.reason}
+                  >
+                    <textarea
+                      className="textarea"
+                      rows={a.value.length > 140 ? 4 : 2}
+                      aria-label={a.label}
+                      disabled={a.blocked}
+                      value={a.value}
+                      maxLength={4000}
+                      placeholder={
+                        a.blocked
+                          ? "Complete this on the website yourself"
+                          : "Missing information — enter your answer or add it to your profile"
+                      }
+                      onChange={(e) =>
+                        setPlan((p) =>
+                          p
+                            ? {
+                                ...p,
+                                answers: p.answers.map((item, j) =>
+                                  j === i
+                                    ? { ...item, value: e.target.value }
+                                    : item,
+                                ),
+                              }
+                            : p,
+                        )
+                      }
+                    />
+                  </Field>
+                  {a.source_quote && (
+                    <details>
+                      <summary>Why this answer · {a.source_title}</summary>
+                      <blockquote>{a.source_quote}</blockquote>
+                    </details>
+                  )}
+                  {a.fallback_value && (
+                    <p className="muted small">
+                      If the institution is not listed, use “{a.fallback_value}
+                      ”.
+                    </p>
+                  )}
+                </div>
+              ))}
+              <button
+                className="btn primary"
+                disabled={busy}
+                onClick={() => void fillAnswers()}
+              >
+                <Check size={16} /> Fill reviewed answers
+              </button>
+            </section>
+          )}
+          {!!answerResults.length && (
+            <section aria-label="Application fill results">
+              <h3>Checked on the page</h3>
+              <ul className="application-fill-results">
+                {answerResults.map((r, i) => (
+                  <li key={i}>
+                    <b>{r.label}</b> · {r.status.replaceAll("_", " ")}
+                    {r.value ? ": " + r.value : ""}
+                    <small>{r.reason}</small>
+                  </li>
+                ))}
+              </ul>
+              <p className="muted small">
+                No Apply or Submit action was performed. Final server-side
+                validation happens only when you submit yourself.
+              </p>
+            </section>
+          )}
+          {preview && (
+            <details className="application-preview" open>
+              <summary>Current form preview</summary>
+              <img
+                src={preview}
+                alt="Current app-controlled application form after filling reviewed answers"
+              />
+            </details>
           )}
           <div className="modal-actions">
             <button
