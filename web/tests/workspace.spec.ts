@@ -366,7 +366,7 @@ test("profile explains pending approval and enables analysis after review", asyn
   await expect(
     page.getByRole("button", { name: "Approve for AI use", exact: true }),
   ).toBeInViewport();
-  await page.screenshot({ path: "/private/tmp/job-agent-approve-button.png" });
+  await page.screenshot({ path: testInfo.outputPath("approval-button.png") });
   await page
     .getByRole("button", { name: "Approve for AI use", exact: true })
     .click();
@@ -392,7 +392,7 @@ test("profile explains pending approval and enables analysis after review", asyn
       .locator(".approval-badge"),
   ).toHaveText("Needs approval");
   await page.screenshot({
-    path: "/private/tmp/job-agent-approval-status.png",
+    path: testInfo.outputPath("approval-status.png"),
     fullPage: true,
   });
   await row.getByRole("button", { name: "Review document" }).click();
