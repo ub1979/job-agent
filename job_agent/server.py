@@ -18,6 +18,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from .managed_browser import ManagedBrowser
 from .browser_assist import BrowserPrepare, EvidenceCapture, prepare, prepare_capture, site_origin, read_package
 from .ai import Assistant, Bridge
 from .documents import export_docx, export_pdf, extract_upload
@@ -26,7 +27,7 @@ from .knowledge import evidence
 from .discovery import web_search
 from .store import identity
 from .ai_servers import discover_servers, validate_server_settings
-from .models import PublicLinkInput, DiscoverInput, ResearchInput, CVInput, DocumentInput, JobInput, MessageInput, Profile, SearchInput, Settings, StatusInput
+from .models import BrowserPageInput, PublicLinkInput, DiscoverInput, ResearchInput, CVInput, DocumentInput, JobInput, MessageInput, Profile, SearchInput, Settings, StatusInput
 from .sources import clean_posting, import_url
 from .discovery import discover_jobs
 from .store import Store
@@ -49,14 +50,17 @@ def create_app(data_root=None, bridge=None):
     store = Store(Path(data_root) if data_root else data_directory())
     bridge = bridge or Bridge(store.root)
     assistant = Assistant(store, bridge)
+    browser = ManagedBrowser(store.root)
 
     @asynccontextmanager
     async def lifespan(app):
         yield
         assistant.close()
+        await asyncio.to_thread(browser.close)
 
     app = FastAPI(title='Job Agent', lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.store, app.state.assistant = store, assistant
+    app.state.browser = browser
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=['localhost', '127.0.0.1', '[::1]', 'testserver'])
 
     @app.middleware('http')
@@ -281,6 +285,45 @@ def create_app(data_root=None, bridge=None):
         return {'job': store.job(job_id) if job_id != 'general' else None, 'messages': store.messages(job_id),
                 'documents': store.documents(job_id) if job_id != 'general' else [],
                 'events': store.events(job_id) if job_id != 'general' else [], 'run': run}
+
+    @app.get('/api/browser/contact')
+    def application_contact():
+        return store.get('application_contact',{})
+
+    @app.post('/api/jobs/{job_id}/browser/open')
+    def open_application(job_id: str,data: BrowserPrepare):
+        prepared=prepare(store,job_id,data)
+        bundle=read_package(store,prepared['token'])
+        store.put('application_contact',data.model_dump(exclude={'cv_id','cover_id','application_url'}))
+        return browser.open(job_id,data.application_url,bundle)
+
+    @app.get('/api/jobs/{job_id}/browser/status')
+    def application_browser_status(job_id: str):
+        store.job(job_id)
+        return browser.call('status',key=job_id)
+
+    @app.post('/api/jobs/{job_id}/browser/fill')
+    def fill_application(job_id: str,data: BrowserPageInput):
+        store.job(job_id)
+        return browser.fill(job_id,data.url)
+
+    @app.post('/api/profile/browser/open')
+    def open_profile_browser(data: PublicLinkInput):
+        if not data.consent:raise ValueError('Approve opening the displayed profile first.')
+        return browser.open('profile',data.url)
+
+    @app.get('/api/profile/browser/status')
+    def profile_browser_status():
+        return browser.call('status',key='profile')
+
+    @app.post('/api/profile/browser/selection')
+    def read_profile_selection(data: BrowserPageInput):
+        result=browser.call('selection',key='profile',approved_url=data.url)
+        if not result['text'].strip():raise ValueError('Select the profile text in the browser window first, then import it.')
+        if len(result['text'])>50000:raise ValueError('Select less than 50,000 characters at a time.')
+        item={'id':identity(),'url':result['url'],'title':result['title'][:200] or 'Selected profile text','text':result['text']}
+        store.put('research:'+item['id'],item)
+        return {'candidates':[item]}
 
     @app.post('/api/jobs/{job_id}/browser-prepare')
     def prepare_browser(job_id: str, data: BrowserPrepare):

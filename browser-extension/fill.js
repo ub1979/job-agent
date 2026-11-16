@@ -16,7 +16,10 @@ export function fillApplication(bundle) {
     if(/portfolio|personal website|website url/.test(label))return fields.website;
     return null;
   };
-  for(const el of document.querySelectorAll('input,textarea,select')) {
+  const forms=Array.from(document.forms).filter(form=>form.querySelector('input[type=file]') || /apply|application|resume|curriculum|cover letter/i.test(form.innerText||''));
+  const scopes=forms.length?forms:document.querySelector('input[type=file]')?[document]:[];
+  if(!scopes.length)return {filled,skipped:['No recognised application form found. Open the application form, then ask Job Agent to fill it.'],notice:'No fields changed and nothing submitted.'};
+  for(const el of new Set(scopes.flatMap(scope=>Array.from(scope.querySelectorAll('input,textarea,select'))))) {
     const label=describe(el)||el.type||el.tagName;
     if(el.disabled || el.readOnly || el.type==='hidden') continue;
     if(el.closest('form')?.querySelector('input[type=password]')){skipped.push('Sign-in form: complete login manually');continue;}

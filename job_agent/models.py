@@ -140,3 +140,7 @@ class DiscoverInput(BaseModel):
 class PublicLinkInput(BaseModel):
     url: str = Field(min_length=8, max_length=2000)
     consent: bool = False
+
+
+class BrowserPageInput(BaseModel):
+    url: str = Field(min_length=8,max_length=2000)

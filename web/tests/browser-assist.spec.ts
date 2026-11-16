@@ -92,7 +92,7 @@ test("browser preparation rejects a different destination", async ({
   expect(error).toContain("does not match");
 });
 
-test("application package can be prepared from the job Documents tab", async ({
+test("application can be prepared directly from the job sidebar", async ({
   page,
   request,
 }) => {
@@ -114,17 +114,78 @@ test("application package can be prepared from the job Documents tab", async ({
       content: "# Alex Example\nVerified experience.",
     },
   });
+  await page.route("**/api/jobs/*/browser/open", (route) =>
+    route.fulfill({
+      json: {
+        url: "https://careers.example.com/apply",
+        title: "Example application",
+        filled: ["Full name"],
+        skipped: [],
+      },
+    }),
+  );
   await page.goto("/#/job/" + job.id);
-  await page.getByRole("button", { name: /^Documents/ }).click();
-  await page.getByRole("button", { name: "Prepare in browser" }).click();
+  await page.getByRole("button", { name: "Prepare application" }).click();
   await expect(
     page.getByRole("dialog", { name: "Prepare browser application" }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Create browser code" }).click();
+  await page.getByRole("button", { name: "Open browser & prepare" }).click();
   await expect(
-    page.getByRole("textbox", { name: "Browser code", exact: true }),
-  ).not.toHaveValue("");
-  await expect(
-    page.getByText("Approved destination: https://careers.example.com"),
+    page.getByText("Application browser ready", { exact: true }),
   ).toBeVisible();
+  await expect(
+    page.getByText("Current page: https://careers.example.com/apply"),
+  ).toBeVisible();
+});
+
+test("built-in browser prepares an application without extension or codes", async ({
+  request,
+}) => {
+  const headers = { "X-Job-Agent": "1" };
+  const job = await (
+    await request.post("/api/jobs", {
+      headers,
+      data: {
+        title: "Managed browser test",
+        url: "http://127.0.0.1:9211/synthetic-application",
+      },
+    })
+  ).json();
+  const cv = await (
+    await request.post(`/api/jobs/${job.id}/documents`, {
+      headers,
+      data: {
+        kind: "cv",
+        title: "Managed test CV",
+        content: "# Alex Example\nVerified experience.",
+      },
+    })
+  ).json();
+  const result = await request.post(`/api/jobs/${job.id}/browser/open`, {
+    headers,
+    data: {
+      cv_id: cv.id,
+      application_url: "http://127.0.0.1:9211/synthetic-application",
+      full_name: "Alex Example",
+      email: "alex@example.com",
+    },
+  });
+  expect(result.ok(), await result.text()).toBe(true);
+  const state = await result.json();
+  expect(state.filled.some((s: string) => s.includes("full name"))).toBe(true);
+  expect(state.filled.some((s: string) => s.includes("cv.pdf"))).toBe(true);
+  expect(state.skipped.some((s: string) => s.includes("authorisation"))).toBe(
+    true,
+  );
+  const status = await (
+    await request.get(`/api/jobs/${job.id}/browser/status`)
+  ).json();
+  expect(status.url).toBe("http://127.0.0.1:9211/synthetic-application");
+  const wrong = await request.post(`/api/jobs/${job.id}/browser/fill`, {
+    headers,
+    data: { url: "https://different.example/form" },
+  });
+  expect(wrong.ok()).toBe(false);
+  const updated = await (await request.get(`/api/jobs/${job.id}`)).json();
+  expect(updated.job.status).not.toBe("applied");
 });

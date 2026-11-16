@@ -423,3 +423,26 @@ def test_browser_selected_profile_text_stays_pending(client):
     assert pending[0]['text']==data['text']
     assert client.post('/api/profile/research/'+pending[0]['id']+'/approve',headers=HEADERS,json={'title':pending[0]['title'],'text':pending[0]['text'],'approved':True}).status_code==200
     assert not client.get('/api/profile/findings').json()['candidates']
+
+
+def test_managed_browser_routes_prepare_without_pairing_codes(client,monkeypatch):
+    job=create(client,url='https://careers.example.com/application')
+    cv=client.post('/api/jobs/'+job['id']+'/documents',headers=HEADERS,json={'kind':'cv','title':'Reviewed CV','content':'# Alex Example\nVerified evidence.'}).json()
+    observed=[]
+    def opened(key,url,bundle=None):
+        observed.append(bundle)
+        return {'url':url,'title':'Application','filled':['email'],'skipped':[]}
+    monkeypatch.setattr(client.app.state.browser,'open',opened)
+    response=client.post('/api/jobs/'+job['id']+'/browser/open',headers=HEADERS,json={'cv_id':cv['id'],'application_url':job['url'],'email':'alex@example.com'})
+    assert response.status_code==200
+    assert 'token' not in response.json()
+    assert observed[0]['documents'][0]['kind']=='cv'
+    assert client.get('/api/browser/contact').json()['email']=='alex@example.com'
+    def browser_call(command,**data):
+        assert command=='selection' and data['approved_url']=='https://www.linkedin.com/in/example'
+        return {'url':data['approved_url'],'title':'My visible profile','text':'Confirmed certificate text selected by user.'}
+    monkeypatch.setattr(client.app.state.browser,'call',browser_call)
+    result=client.post('/api/profile/browser/selection',headers=HEADERS,json={'url':'https://www.linkedin.com/in/example'})
+    assert result.status_code==200
+    assert result.json()['candidates'][0]['text'].startswith('Confirmed certificate')
+    assert not client.get('/api/cvs').json()

@@ -28,3 +28,6 @@ profile.json
 *.doc
 *.bundle
 *.pem
+
+# Private application-browser sessions and sign-ins
+application-browser/

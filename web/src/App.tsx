@@ -1793,19 +1793,43 @@ function CareerResearch({
     }
   }
   const [captureCode, setCaptureCode] = useState<{
-    token: string;
-    origin: string;
+    url: string;
+    title: string;
   } | null>(null);
   async function captureBrowser() {
     setBusy("capture");
     setError("");
     try {
       setCaptureCode(
-        await api("/profile/browser-code", "POST", {
+        await api("/profile/browser/open", "POST", {
           url: link,
           consent: linkConsent,
         }),
       );
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy("");
+    }
+  }
+  async function refreshProfileBrowser() {
+    try {
+      setCaptureCode(await api("/profile/browser/status"));
+    } catch (e) {
+      setError(errorText(e));
+    }
+  }
+  async function importSelection() {
+    if (!captureCode) return;
+    setBusy("selection");
+    setError("");
+    try {
+      const r = await api<{ candidates: NonNullable<typeof candidates> }>(
+        "/profile/browser/selection",
+        "POST",
+        { url: captureCode.url },
+      );
+      setCandidates(r.candidates);
     } catch (e) {
       setError(errorText(e));
     } finally {
@@ -1978,35 +2002,43 @@ function CareerResearch({
       <div className="notice">
         <b>LinkedIn or another signed-in profile?</b>
         <p>
-          Open it in your own Chrome/Edge browser and select the text you want
-          to import, including certificates. The browser assistant can copy only
-          your selection after you preview it. It does not log in, crawl the
-          profile or read hidden sections.
+          Open it in Job Agent’s browser, sign in yourself and select the text
+          you want to import, including certificates. Import your selection for
+          review, then approve the evidence you confirm. No extension or pairing
+          code is needed.
         </p>
         <button
           className="btn"
           disabled={!!busy || !linkConsent || !link.trim()}
           onClick={() => void captureBrowser()}
         >
-          Create browser text-import code
+          Open profile browser
         </button>
         {captureCode && (
           <>
-            <p>For: {captureCode.origin} · valid for 10 minutes</p>
-            <Field label="Profile import code">
-              <input className="input" readOnly value={captureCode.token} />
-            </Field>
-            <p>
-              In the installed Job Agent extension, paste this code, select Read
-              my selected text, review it and send it to Job Agent. Install the
-              browser-extension folder via your browser’s Extensions page if
-              needed.
+            <p style={{ overflowWrap: "anywhere" }}>
+              Browser page: {captureCode.url}
             </p>
+            <p>
+              Select the profile text in the browser window. Refresh the status
+              if you navigated, then import. The finding stays pending until
+              approved.
+            </p>
+            <button
+              className="btn"
+              onClick={() => void refreshProfileBrowser()}
+            >
+              Refresh profile browser status
+            </button>
+            <button
+              className="btn primary"
+              disabled={!!busy}
+              onClick={() => void importSelection()}
+            >
+              Import selected text
+            </button>
           </>
         )}
-        <a className="text-button" href="/api/browser/extension" download>
-          Download browser assistant
-        </a>
         <button className="btn" onClick={() => void refreshFindings()}>
           Refresh imported findings
         </button>
@@ -2780,9 +2812,11 @@ function BrowserApplication({
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
   const [prepared, setPrepared] = useState<{
-    token: string;
-    origin: string;
-    expires_in: number;
+    url: string;
+    title: string;
+    filled?: string[];
+    skipped?: string[];
+    notice?: string;
   } | null>(null);
   const cvs = documents.filter((d) => d.kind === "cv"),
     covers = documents.filter((d) => d.kind === "cover_letter");
@@ -2799,12 +2833,44 @@ function BrowserApplication({
     github: profile.github_url || "",
     website: "",
   });
+  useEffect(() => {
+    void api<Record<string, string>>("/browser/contact")
+      .then((saved) => setForm((f) => ({ ...f, ...saved })))
+      .catch(() => {});
+  }, []);
+  async function refreshBrowser() {
+    setError("");
+    try {
+      const result = await api<{ url: string; title: string }>(
+        `/jobs/${job.id}/browser/status`,
+      );
+      setPrepared(result);
+    } catch (e) {
+      setError(errorText(e));
+    }
+  }
+  async function fillCurrent() {
+    if (!prepared) return;
+    setBusy(true);
+    setError("");
+    try {
+      setPrepared(
+        await api(`/jobs/${job.id}/browser/fill`, "POST", {
+          url: prepared.url,
+        }),
+      );
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  }
   async function prepare() {
     setBusy(true);
     setError("");
     setPrepared(null);
     try {
-      setPrepared(await api(`/jobs/${job.id}/browser-prepare`, "POST", form));
+      setPrepared(await api(`/jobs/${job.id}/browser/open`, "POST", form));
     } catch (e) {
       setError(errorText(e));
     } finally {
@@ -2816,12 +2882,16 @@ function BrowserApplication({
       <button
         className="btn"
         onClick={() => {
-          setForm((f) => ({ ...f, cv_id: f.cv_id || cvs[0]?.id || "" }));
+          setForm((f) => ({
+            ...f,
+            cv_id: f.cv_id || cvs[0]?.id || "",
+            cover_id: f.cv_id ? f.cover_id : covers[0]?.id || "",
+          }));
           setOpen(true);
           setPrepared(null);
         }}
       >
-        <ExternalLink size={16} /> Prepare in browser
+        <ExternalLink size={16} /> Prepare application
       </button>
       {open && (
         <Modal
@@ -2829,15 +2899,15 @@ function BrowserApplication({
           onClose={() => !busy && setOpen(false)}
         >
           <p>
-            Use the Chrome/Edge application assistant to fill recognised fields
-            and attach your selected documents. You review the page and press
-            Submit yourself. Some sites save answers or upload files as soon as
-            they are filled.
+            Job Agent opens its own Chrome/Edge window and fills recognised
+            fields and attach your selected documents. You review the page and
+            press Submit yourself. Some sites save answers or upload files as
+            soon as they are filled.
           </p>
           <p className="muted small">
-            Install the unpacked <code>browser-extension</code> folder from this
-            project through Chrome/Edge’s Extensions page with Developer mode
-            enabled. Then open the actual application form in that browser.
+            No extension or pairing code needed. Sign in yourself if asked; this
+            browser remembers its own logins on this device. Contact details
+            below are saved locally for future applications.
           </p>
           {!cvs.length && (
             <p className="notice">
@@ -2845,16 +2915,9 @@ function BrowserApplication({
               it in Documents.
             </p>
           )}
-          <p>
-            <a className="text-button" href="/api/browser/extension" download>
-              Download Chrome/Edge browser assistant
-            </a>{" "}
-            · Unzip, then choose Load unpacked on your browser’s Extensions
-            page.
-          </p>
           <Field
             label="Application form URL"
-            hint="Use the actual form address after any redirect, so the browser code is bound to the correct website."
+            hint="Opens the job or application page. If it needs login or an Apply step, do that in the browser, then use Fill current application page."
           >
             <input
               className="input"
@@ -2933,16 +2996,40 @@ function BrowserApplication({
           {error && <Alert>{error}</Alert>}
           {prepared && (
             <div className="notice" role="status">
-              <b>Browser package ready · 10 minutes</b>
-              <p>Approved destination: {prepared.origin}</p>
-              <Field label="Browser code">
-                <input className="input" readOnly value={prepared.token} />
-              </Field>
-              <p>
-                Copy this code into the Job Agent extension on the application
-                page. Select Load selected documents, check the destination,
-                then Fill this page & attach documents. Keep this code private.
+              <b>Application browser ready</b>
+              <p>{prepared.title}</p>
+              <p style={{ overflowWrap: "anywhere" }}>
+                Current page: {prepared.url}
               </p>
+              {prepared.filled && (
+                <p>{prepared.filled.length} fields or attachments prepared.</p>
+              )}
+              {prepared.skipped?.length ? (
+                <ul>
+                  {prepared.skipped.map((item, i) => (
+                    <li key={i}>{item}</li>
+                  ))}
+                </ul>
+              ) : null}
+              <p>
+                Review the browser window and submit there yourself. For a
+                login, redirect or next step, navigate in the browser, refresh
+                its status below, then request filling again.
+              </p>
+              <button
+                className="btn"
+                disabled={busy}
+                onClick={() => void refreshBrowser()}
+              >
+                Refresh browser status
+              </button>
+              <button
+                className="btn primary"
+                disabled={busy}
+                onClick={() => void fillCurrent()}
+              >
+                Fill current application page
+              </button>
             </div>
           )}
           <div className="modal-actions">
@@ -2958,7 +3045,7 @@ function BrowserApplication({
               disabled={busy || !form.cv_id || !form.application_url}
               onClick={() => void prepare()}
             >
-              {busy ? <Spinner /> : <Check size={16} />} Create browser code
+              {busy ? <Spinner /> : <Check size={16} />} Open browser & prepare
             </button>
           </div>
         </Modal>
@@ -3332,6 +3419,13 @@ function Chat({
               ))}
             </div>
             <div className="sidebar-content">
+              <div style={{ marginBottom: 18 }}>
+                <BrowserApplication
+                  job={job}
+                  documents={data.documents}
+                  profile={profile}
+                />
+              </div>
               {tab === "details" ? (
                 <>
                   <div className="company-detail">
@@ -3398,11 +3492,6 @@ function Chat({
                 </>
               ) : tab === "documents" ? (
                 <>
-                  <BrowserApplication
-                    job={job}
-                    documents={data.documents}
-                    profile={profile}
-                  />
                   <p className="muted small">
                     Every revision is saved. Submitted versions remain preserved
                     in History.
